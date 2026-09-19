@@ -25,4 +25,5 @@ backend/last_uploaded_doc.txt
 *.log
 
 # Deployment Build Artifacts
-frontend_static/
+# (backend/frontend_static is committed: the Gradio Space serves it without an npm build)
+/frontend_static/

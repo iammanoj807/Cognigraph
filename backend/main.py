@@ -39,11 +39,13 @@ app.add_middleware(
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
 
-# Check if the build directory exists (it will in Docker)
-frontend_dist = "frontend_static"
-if os.path.exists(frontend_dist):
+# The built React UI lives next to this file: copied in by the Docker build, or committed
+# at backend/frontend_static for the Gradio Space (`npm run build:space`).
+FRONTEND_DIR = os.path.realpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "frontend_static"))
+FRONTEND_INDEX = os.path.join(FRONTEND_DIR, "index.html")
+if os.path.isdir(os.path.join(FRONTEND_DIR, "assets")):
     # Mount assets (JS/CSS)
-    app.mount("/assets", StaticFiles(directory=f"{frontend_dist}/assets"), name="assets")
+    app.mount("/assets", StaticFiles(directory=os.path.join(FRONTEND_DIR, "assets")), name="assets")
     
     # Catch-all route to serve index.html for client-side routing
     # Must be defined AFTER specific API routes, but before generic ones?
@@ -88,8 +90,8 @@ def get_providers():
 @app.get("/")
 def read_root():
     # Explicitly serve the frontend index.html at root
-    if os.path.exists("frontend_static/index.html"):
-        return FileResponse("frontend_static/index.html")
+    if os.path.exists(FRONTEND_INDEX):
+        return FileResponse(FRONTEND_INDEX)
     return {"status": "online", "message": "Backend running. Frontend not built."}
 
 @app.post("/upload")
@@ -332,13 +334,14 @@ if __name__ == "__main__":
 async def serve_spa(full_path: str):
     # Try to serve a specific static file if it exists in the build folder
     # This comes AFTER specific API routes and /assets mount, so it catches root files like /manoj.png
-    file_path = f"frontend_static/{full_path}"
-    if os.path.exists(file_path) and os.path.isfile(file_path):
+    file_path = os.path.realpath(os.path.join(FRONTEND_DIR, full_path))
+    # Only serve files inside the build folder (blocks ../ path traversal)
+    if file_path.startswith(FRONTEND_DIR + os.sep) and os.path.isfile(file_path):
         return FileResponse(file_path)
 
     # Otherwise, fallback to index.html for React Router (SPA)
-    if os.path.exists("frontend_static/index.html"):
-        return FileResponse("frontend_static/index.html")
+    if os.path.exists(FRONTEND_INDEX):
+        return FileResponse(FRONTEND_INDEX)
     
     # If running locally without build, just return 404 or message
     return {"message": "Backend running. Frontend not built (use npm run dev for local development)."}

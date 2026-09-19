@@ -3,9 +3,11 @@ title: CogniGraph
 emoji: 🕸️
 colorFrom: blue
 colorTo: purple
-sdk: docker
+sdk: gradio
+sdk_version: "6.28.0"
+python_version: "3.10"
+app_file: app.py
 pinned: false
-app_port: 7860
 short_description: Transform documents into interactive Knowledge Graphs.
 ---
 <div align="center">
@@ -107,6 +109,18 @@ This will automatically:
 *   Install Python requirements.
 *   Start the **FastAPI Backend** on `http://localhost:8000`.
 *   Start the **React Frontend** on `http://localhost:5173`.
+
+---
+
+## ☁️ Deploying to Hugging Face Spaces
+
+The Space runs on the free **Gradio SDK** tier: `app.py` starts the same FastAPI backend and serves the prebuilt React UI from `backend/frontend_static/`. `packages.txt` installs Tesseract and Poppler for OCR.
+
+After changing the frontend, rebuild the UI before pushing:
+```bash
+cd frontend
+npm run build:space
+```
 
 ---
 
