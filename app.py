@@ -8,6 +8,29 @@ starts the app on port 7860.
 import os
 import sys
 
+
+def _report_zerogpu_startup():
+    """
+    ZeroGPU hardware refuses to start a Space unless it reports at least one
+    @spaces.GPU function at startup. CogniGraph needs no GPU (the LLMs are remote
+    APIs), so register a placeholder that is never called and send the report
+    ourselves: `spaces` normally sends it from gr.Blocks.launch(), which this app
+    never calls because it serves FastAPI directly.
+    """
+    import spaces
+
+    @spaces.GPU
+    def _zerogpu_placeholder():
+        return None
+
+    from spaces.zero import startup
+    startup()
+
+
+# `spaces` must be imported before anything else that could touch CUDA
+if os.getenv("SPACES_ZERO_GPU", "").lower() in ("1", "t", "true"):
+    _report_zerogpu_startup()
+
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "backend"))
 
 import uvicorn
