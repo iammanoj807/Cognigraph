@@ -128,9 +128,9 @@ const GraphView = ({ data, analysis, documentName, highlightedNodes = [], select
         const s = idOf(link.source);
         const t = idOf(link.target);
         const rootEdge = s === ROOT_ID || t === ROOT_ID;
-        if (visual.lit.has(s) && visual.lit.has(t)) return 'rgba(244,114,182,0.95)';
+        if (visual.lit.has(s) && visual.lit.has(t)) return 'rgba(74,222,128,0.95)';
         if (visual.selectedId && (s === visual.selectedId || t === visual.selectedId)) return 'rgba(255,255,255,0.75)';
-        if (!rootEdge && (visual.lit.has(s) || visual.lit.has(t))) return 'rgba(244,114,182,0.35)';
+        if (!rootEdge && (visual.lit.has(s) || visual.lit.has(t))) return 'rgba(74,222,128,0.35)';
         if (visual.dimming) return rootEdge ? 'rgba(148,163,184,0.03)' : 'rgba(148,163,184,0.06)';
         return rootEdge ? 'rgba(148,163,184,0.12)' : 'rgba(148,163,255,0.5)';
     }, [visual]);
@@ -340,7 +340,7 @@ const GraphView = ({ data, analysis, documentName, highlightedNodes = [], select
                     </span>
                 ))}
                 <span className="flex items-center gap-1.5 text-[11px] text-slate-400">
-                    <span className="h-2 w-2 rounded-full bg-signal shadow-[0_0_8px_#f472b6]" />
+                    <span className="h-2 w-2 rounded-full bg-signal shadow-[0_0_8px_#4ade80]" />
                     In answer
                 </span>
                 <span className="h-3 w-px bg-white/10" />

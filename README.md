@@ -24,7 +24,7 @@ short_description: Transform documents into interactive Knowledge Graphs.
 
 - **📄 Universal Document Support**: Handles **PDFs** (native text), **Scanned PDFs** (via OCR/Tesseract), **TXT**, and **Markdown** files.
 - **🕸️ Interactive 3D Knowledge Graph**: Fly through a glowing constellation of people, organizations, and concepts. Hubs are sized and colored by how connected they are.
-- **💬 Context-Aware Chat**: Chat with your document using **RAG (Retrieval-Augmented Generation)**. The AI answers strictly from the document's content, and the concepts each answer uses **light up in pink** on the graph.
+- **💬 Context-Aware Chat**: Chat with your document using **RAG (Retrieval-Augmented Generation)**. The AI answers strictly from the document's content, and the concepts each answer uses **light up in green** on the graph.
 - **🔎 Explore by Hand**: Search any concept (press `/`), click a node to see its relationships, or ask about it in one click.
 - **🔁 Three-Provider AI Fallback**: Groq → Gemini → NVIDIA. If one provider is rate-limited or fails, the next one answers automatically, and the UI shows which provider handled each request.
 - **🔍 Smart OCR Fallback**: Automatically detects scanned/image-based PDFs and applies OCR to extract text.
@@ -139,6 +139,7 @@ Every LLM request (graph extraction and chat) walks an ordered fallback chain:
 A provider that returns a rate limit (HTTP 429) is skipped until its `Retry-After` passes, so it doesn't slow down later requests. A response that comes back empty or can't be parsed into a graph also falls through to the next provider. The models can be overridden with `GROQ_MODEL`, `GEMINI_MODEL` and `NVIDIA_MODEL`.
 
 > ℹ️ Groq's free tier caps prompts at ~8K tokens per minute, so documents longer than roughly 25K characters are usually graphed by Gemini, while chat stays on Groq.
+
 The application uses **Retrieval-Augmented Generation (RAG)** to fetch only relevant document chunks to combine with graph relationships for grounded answers.
 
 ---

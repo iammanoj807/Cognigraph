@@ -6,7 +6,7 @@ export const TIER_COLORS = {
     root: '#ffffff',
     hub: '#a78bfa',
     concept: '#38bdf8',
-    detail: '#5eead4',
+    detail: '#cbd5e1',
 };
 
 export const TIER_LABELS = {
@@ -16,7 +16,7 @@ export const TIER_LABELS = {
     detail: 'Detail',
 };
 
-export const SIGNAL_COLOR = '#f472b6';
+export const SIGNAL_COLOR = '#4ade80';
 
 export const idOf = (end) => (end && typeof end === 'object' ? end.id : end);
 

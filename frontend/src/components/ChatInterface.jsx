@@ -129,7 +129,7 @@ const ChatInterface = ({ chain, lastEngine, documentName, suggestions = [], pend
                             Ask anything about {documentName ? <span className="aurora-text break-words">{documentName}</span> : 'your document'}
                         </h3>
                         <p className="mt-2 text-[13px] leading-relaxed text-slate-400">
-                            Answers come only from the document. The concepts each answer uses light up in <span className="text-signal">pink</span> on the graph.
+                            Answers come only from the document. The concepts each answer uses light up in <span className="text-signal">green</span> on the graph.
                         </p>
                         {suggestions.length > 0 && (
                             <div className="mt-6 space-y-2">
@@ -171,7 +171,7 @@ const ChatInterface = ({ chain, lastEngine, documentName, suggestions = [], pend
                                         <button
                                             key={id}
                                             onClick={() => onFocusNode?.(id)}
-                                            className="max-w-[180px] truncate rounded-full border border-signal/25 bg-signal/[0.08] px-2.5 py-0.5 text-[11px] text-pink-200 transition hover:border-signal/60 hover:bg-signal/20"
+                                            className="max-w-[180px] truncate rounded-full border border-signal/25 bg-signal/[0.08] px-2.5 py-0.5 text-[11px] text-green-200 transition hover:border-signal/60 hover:bg-signal/20"
                                             title={`Fly to "${id}"`}
                                         >
                                             {id}

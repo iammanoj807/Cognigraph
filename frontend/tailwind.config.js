@@ -20,7 +20,7 @@ export default {
                     cyan: '#67e8f9',
                     violet: '#a78bfa',
                 },
-                signal: '#f472b6',
+                signal: '#4ade80',
                 provider: {
                     groq: '#f55036',
                     gemini: '#4c8df6',

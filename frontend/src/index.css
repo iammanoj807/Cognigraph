@@ -12,7 +12,7 @@
   --muted: #8b93a7;
   --teal: #5eead4;
   --violet: #a78bfa;
-  --signal: #f472b6;
+  --signal: #4ade80;
 }
 
 html,
@@ -137,7 +137,7 @@ body {
 }
 
 .graph-tip .rel {
-  color: #f472b6;
+  color: #4ade80;
   font-family: 'JetBrains Mono', monospace;
   font-size: 11px;
 }
