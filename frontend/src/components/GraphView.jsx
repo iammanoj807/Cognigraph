@@ -1,268 +1,364 @@
-import React, { useRef, useEffect, useState } from 'react';
+import React, { useRef, useEffect, useLayoutEffect, useState, useMemo, useCallback } from 'react';
 import ForceGraph3D from 'react-force-graph-3d';
+import * as THREE from 'three';
 import SpriteText from 'three-spritetext';
+import { Plus, Minus, Maximize, Rotate3d, Tags } from 'lucide-react';
+import { ROOT_ID, TIER_COLORS, TIER_LABELS, SIGNAL_COLOR, idOf, nodeRadius, escapeHtml } from '../lib/graph';
 
-const GraphView = ({ data, highlightedNodes = [] }) => {
+const SPHERE = new THREE.SphereGeometry(1, 24, 18);
+const LABEL_COLOR = '#e7ebf3';
+const AUTO_ROTATE_SPEED = 0.6;
+
+// Soft radial sprite shared by every node's halo, so nodes glow without post-processing
+let glowTexture = null;
+const getGlowTexture = () => {
+    if (glowTexture) return glowTexture;
+    const size = 128;
+    const canvas = document.createElement('canvas');
+    canvas.width = size;
+    canvas.height = size;
+    const ctx = canvas.getContext('2d');
+    const gradient = ctx.createRadialGradient(size / 2, size / 2, 0, size / 2, size / 2, size / 2);
+    gradient.addColorStop(0, 'rgba(255,255,255,1)');
+    gradient.addColorStop(0.18, 'rgba(255,255,255,0.55)');
+    gradient.addColorStop(0.5, 'rgba(255,255,255,0.1)');
+    gradient.addColorStop(1, 'rgba(255,255,255,0)');
+    ctx.fillStyle = gradient;
+    ctx.fillRect(0, 0, size, size);
+    glowTexture = new THREE.CanvasTexture(canvas);
+    return glowTexture;
+};
+
+const truncate = (text, max) => (text.length > max ? `${text.slice(0, max - 1)}…` : text);
+
+/**
+ * Applies the current highlight / selection / hover state to a node's meshes.
+ * Objects are built once and mutated here, which is far cheaper than rebuilding them.
+ */
+function styleNode(obj, node, v) {
+    const ud = obj.userData;
+    const lit = v.lit.has(node.id);
+    const selected = node.id === v.selectedId;
+    const hovered = node.id === v.hoverId;
+    const near = v.focus ? v.focus.has(node.id) : false;
+    const active = lit || selected || near || hovered;
+    const faded = v.dimming && !active;
+    const color = lit ? SIGNAL_COLOR : selected ? '#ffffff' : ud.color;
+    const scale = lit || selected ? 1.3 : hovered ? 1.2 : 1;
+
+    ud.core.material.color.set(color);
+    ud.core.material.opacity = faded ? 0.14 : 1;
+    ud.core.scale.setScalar(ud.r * scale);
+
+    ud.halo.material.color.set(color);
+    ud.halo.material.opacity = faded ? 0.03 : lit || selected ? 0.9 : 0.35;
+    ud.halo.scale.setScalar(ud.r * (lit || selected ? 6 : 4));
+
+    const important = ud.tier === 'root' || ud.tier === 'hub';
+    ud.label.visible = active || (v.labelMode === 'all' ? !faded : important && !v.dimming);
+    const labelColor = lit ? SIGNAL_COLOR : LABEL_COLOR;
+    if (ud.label.color !== labelColor) ud.label.color = labelColor;
+    ud.label.position.y = ud.r * scale + ud.label.textHeight * 0.8 + 1.5;
+}
+
+const GraphView = ({ data, analysis, documentName, highlightedNodes = [], selectedId, onSelect }) => {
     const fgRef = useRef();
     const containerRef = useRef();
+    const rotateTimerRef = useRef();
     const [dimensions, setDimensions] = useState({ width: 0, height: 0 });
+    const [hoverId, setHoverId] = useState(null);
+    const [autoRotate, setAutoRotate] = useState(true);
+    const [labelMode, setLabelMode] = useState(() => (data.nodes.length > 70 ? 'smart' : 'all'));
+    const autoRotateRef = useRef(autoRotate);
 
+    const visual = useMemo(() => {
+        const lit = new Set(highlightedNodes);
+        const focus = selectedId ? new Set([selectedId, ...(analysis.neighbors.get(selectedId) || []).map((n) => n.id)]) : null;
+        return { lit, focus, selectedId, labelMode, dimming: lit.size > 0 || !!focus };
+    }, [highlightedNodes, selectedId, analysis, labelMode]);
+
+    // Read by the node builder, so freshly created objects start in the right state
+    const visualRef = useRef({ ...visual, hoverId });
+    useLayoutEffect(() => {
+        visualRef.current = { ...visual, hoverId };
+        autoRotateRef.current = autoRotate;
+    });
+
+    const nodeThreeObject = useCallback((node) => {
+        const tier = analysis.tier.get(node.id) || 'detail';
+        const color = TIER_COLORS[tier];
+        const r = nodeRadius(tier, analysis.degree.get(node.id) || 0);
+
+        const core = new THREE.Mesh(SPHERE, new THREE.MeshBasicMaterial({ color, transparent: true }));
+        const halo = new THREE.Sprite(new THREE.SpriteMaterial({
+            map: getGlowTexture(),
+            color,
+            transparent: true,
+            blending: THREE.AdditiveBlending,
+            depthWrite: false,
+        }));
+
+        const text = node.id === ROOT_ID && documentName ? truncate(documentName, 32) : truncate(String(node.id), 40);
+        const label = new SpriteText(text);
+        label.fontFace = 'Inter, system-ui, sans-serif';
+        label.fontWeight = tier === 'hub' || tier === 'root' ? '600' : '500';
+        label.textHeight = tier === 'root' ? 8 : tier === 'hub' ? 6.5 : tier === 'concept' ? 5 : 4.2;
+        label.color = LABEL_COLOR;
+        label.backgroundColor = 'rgba(5,7,13,0.6)';
+        label.padding = [3, 1.5];
+        label.borderRadius = 2.5;
+        label.material.depthWrite = false;
+
+        const group = new THREE.Group();
+        group.add(halo, core, label);
+        group.userData = { core, halo, label, color, r, tier };
+        styleNode(group, node, visualRef.current);
+        return group;
+    }, [analysis, documentName]);
+
+    // Re-style existing objects whenever highlight, selection, hover or label mode changes
     useEffect(() => {
-        // Auto-rotate camera slightly for dynamic effect
-        if (fgRef.current) {
-            fgRef.current.d3Force('charge').strength(-150); // More repulsion = less clutter
-            fgRef.current.d3Force('link').distance(80); // Longer edges = more spread out
+        const current = { ...visual, hoverId };
+        data.nodes.forEach((node) => {
+            if (node.__threeObj?.userData?.core) styleNode(node.__threeObj, node, current);
+        });
+    }, [visual, hoverId, data]);
 
-            // Set initial camera position logic
-            // zoomToFit ensures everything is visible but maximized.
-            // We wait slightly for the force engine to spread nodes out.
-            setTimeout(() => {
-                if (fgRef.current) {
-                    fgRef.current.zoomToFit(1000, 20); // Minimal padding = Maximum graph size
-                }
-            }, 600); // Slightly longer wait for physics to settle
+    const linkColor = useCallback((link) => {
+        const s = idOf(link.source);
+        const t = idOf(link.target);
+        const rootEdge = s === ROOT_ID || t === ROOT_ID;
+        if (visual.lit.has(s) && visual.lit.has(t)) return 'rgba(244,114,182,0.95)';
+        if (visual.selectedId && (s === visual.selectedId || t === visual.selectedId)) return 'rgba(255,255,255,0.75)';
+        if (!rootEdge && (visual.lit.has(s) || visual.lit.has(t))) return 'rgba(244,114,182,0.35)';
+        if (visual.dimming) return rootEdge ? 'rgba(148,163,184,0.03)' : 'rgba(148,163,184,0.06)';
+        return rootEdge ? 'rgba(148,163,184,0.12)' : 'rgba(148,163,255,0.5)';
+    }, [visual]);
 
-            // Enable panning via OrbitControls config
-            // react-force-graph-3d uses Three.js OrbitControls exposed via .controls()
-            const controls = fgRef.current.controls();
-            if (controls) {
-                controls.enablePan = true;
-                controls.enableZoom = true;
-                controls.enableRotate = true;
+    const linkWidth = useCallback((link) => {
+        const s = idOf(link.source);
+        const t = idOf(link.target);
+        if (visual.lit.has(s) && visual.lit.has(t)) return 1.8;
+        if (visual.selectedId && (s === visual.selectedId || t === visual.selectedId)) return 1.2;
+        return 0.5;
+    }, [visual]);
 
-                // Adjust damping for smoother mobile feel
-                controls.enableDamping = true;
-                controls.dampingFactor = 0.2;
-            }
-        }
-    }, [data]); // Run when data loads
+    const linkParticles = useCallback((link) => {
+        const s = idOf(link.source);
+        const t = idOf(link.target);
+        if (visual.lit.has(s) && visual.lit.has(t)) return 3;
+        if (visual.selectedId && (s === visual.selectedId || t === visual.selectedId)) return 2;
+        return 0;
+    }, [visual]);
 
-    // Function to pan the camera (strafe)
-    const handlePan = (direction) => {
-        if (!fgRef.current) return;
+    const linkParticleColor = useCallback((link) => (visual.lit.has(idOf(link.source)) ? SIGNAL_COLOR : '#ffffff'), [visual]);
 
-        // This moves the camera position relative to its current orientation
-        // We need to calculate right/up vectors to move correctly
+    const linkLabel = useCallback((link) => {
+        const s = idOf(link.source);
+        const t = idOf(link.target);
+        if (s === ROOT_ID || t === ROOT_ID) return '';
+        return `<div class="graph-tip">${escapeHtml(s)} <span class="rel">— ${escapeHtml(link.label || 'related to')} →</span> ${escapeHtml(t)}</div>`;
+    }, []);
 
-        const currentPos = fgRef.current.cameraPosition();
+    // Suspend auto-rotation while the camera flies, so the two motions don't fight
+    const pauseAutoRotate = useCallback((ms) => {
+        const controls = fgRef.current?.controls();
+        if (!controls) return;
+        controls.autoRotate = false;
+        clearTimeout(rotateTimerRef.current);
+        rotateTimerRef.current = setTimeout(() => {
+            controls.autoRotate = autoRotateRef.current;
+        }, ms + 200);
+    }, []);
 
-        // Simple heuristic: 
-        // We just modify X/Y for basic movement, but for "Up" we move Y, for "Right" we move X relative to screen.
-        // Since we can't easily access the THREE.Camera object to get local vectors here, we try to simulate it.
-        // Actually, for ForceGraph3D, modifying x/y indiscriminately works if we are looking roughly at 0,0,0.
+    /**
+     * Centers the camera on a set of nodes and pulls back just far enough to fit them,
+     * keeping the current viewing angle. (The library's zoomToFit always aims at the
+     * origin, which leaves a lit-up cluster off to one side.)
+     */
+    const frameNodes = useCallback((ids, ms = 1200, { pad = 25, scale = 1.45 } = {}) => {
+        const fg = fgRef.current;
+        if (!fg) return;
+        const wanted = new Set(ids);
+        const points = data.nodes.filter((n) => wanted.has(n.id) && n.x != null);
+        if (!points.length) return;
 
-        const offset = 40; // Larger step
-        let { x, y, z } = currentPos;
+        const center = { x: 0, y: 0, z: 0 };
+        points.forEach((p) => {
+            center.x += p.x / points.length;
+            center.y += p.y / points.length;
+            center.z += p.z / points.length;
+        });
+        const radius = Math.max(40, ...points.map((p) => Math.hypot(p.x - center.x, p.y - center.y, p.z - center.z)));
 
-        // To pan, we must move BOTH the camera AND the lookAt target (controls.target)
-        // AND we must ensure we get the updated lookAt target first.
-        const controls = fgRef.current.controls();
-        const target = controls ? controls.target : { x: 0, y: 0, z: 0 };
+        // Fit against the narrower of the vertical / horizontal field of view
+        const camera = fg.camera();
+        const vFov = ((camera.fov || 50) * Math.PI) / 180;
+        const fov = Math.min(vFov, 2 * Math.atan(Math.tan(vFov / 2) * (camera.aspect || 1)));
+        // Extra room for node size, labels and the floating top bar
+        const distance = ((radius + pad) * scale) / Math.sin(fov / 2);
 
-        let dx = 0, dy = 0;
+        const pos = fg.cameraPosition();
+        const target = fg.controls()?.target || { x: 0, y: 0, z: 0 };
+        let dir = { x: pos.x - target.x, y: pos.y - target.y, z: pos.z - target.z };
+        const len = Math.hypot(dir.x, dir.y, dir.z);
+        dir = len > 0.001 ? { x: dir.x / len, y: dir.y / len, z: dir.z / len } : { x: 0, y: 0, z: 1 };
 
-        // Naive screen-space-ish mapping
-        if (direction === 'up') dy = offset;
-        if (direction === 'down') dy = -offset;
-        if (direction === 'left') dx = -offset;
-        if (direction === 'right') dx = offset;
-
-        const newPos = { x: x - dx, y: y - dy, z: z };
-        const newTarget = { x: target.x - dx, y: target.y - dy, z: target.z };
-
-        fgRef.current.cameraPosition(
-            newPos,
-            newTarget,
-            500 // Smooth transition
+        pauseAutoRotate(ms);
+        fg.cameraPosition(
+            { x: center.x + dir.x * distance, y: center.y + dir.y * distance, z: center.z + dir.z * distance },
+            center,
+            ms
         );
-    };
-    // Focus on highlighted nodes and update visuals
+    }, [data, pauseAutoRotate]);
+
+    // The whole graph gets a tighter fit than an answer's cluster; the library's zoomToFit
+    // sizes against a bounding cube and leaves the graph tiny on portrait screens.
+    const fitAll = useCallback((ms = 900) => {
+        frameNodes(data.nodes.map((n) => n.id), ms, { pad: 8, scale: 1.08 });
+    }, [data, frameNodes]);
+
+    const isReady = dimensions.width > 0;
+
+    // Physics + camera setup for each new graph
     useEffect(() => {
-        console.log("GraphView received highlightedNodes:", highlightedNodes);
-        if (fgRef.current) {
-            // 1. Update Camera Focus
-            if (highlightedNodes.length > 0) {
-                const node = data.nodes.find(n => n.id === highlightedNodes[0]);
-                if (node) {
-                    const distance = 180; // "Average view" - wider context
-                    const distRatio = 1 + distance / Math.hypot(node.x, node.y, node.z);
-                    fgRef.current.cameraPosition(
-                        { x: node.x * distRatio, y: node.y * distRatio, z: node.z * distRatio },
-                        node,
-                        2000
-                    );
-                }
-            }
+        const fg = fgRef.current;
+        if (!fg) return;
+        fg.d3Force('charge').strength(-180);
+        // No reheat here: the graph digest runs on a deferred tick and re-heats with these forces itself.
+        // Reheating before that digest starts the engine without a layout and crashes the render loop.
+        fg.d3Force('link').distance((link) => (idOf(link.source) === ROOT_ID || idOf(link.target) === ROOT_ID ? 75 : 42));
 
-            // 2. Manually update Three.js objects (SpriteText) and Node Colors
-            // This is necessary because nodeThreeObject is cached and doesn't auto-update
-            data.nodes.forEach(node => {
-                const isHighlighted = highlightedNodes.includes(node.id);
-
-                // Update SpriteText (if it exists)
-                if (node.__threeObj) {
-                    const sprite = node.__threeObj;
-                    sprite.color = isHighlighted ? '#86efac' : 'white'; // Light Green
-                    sprite.textHeight = isHighlighted ? 5 : 4;
-                    sprite.backgroundColor = isHighlighted ? 'rgba(134, 239, 172, 0.2)' : 'rgba(0,0,0,0.5)';
-                    sprite.position.y = isHighlighted ? 10 : 10;
-                }
-
-                // Update Node Color (for the sphere)
-                // We modify the node object directly so the accessor picks it up or we force update
-                node.color = isHighlighted ? '#86efac' : '#3b82f6';
-                node.val = isHighlighted ? 4 : 1; // Slightly larger size
-            });
-
-            // 3. Force graph to re-render the scene to apply color/size changes
-            // Re-setting the graph data reference or using internal methods can help,
-            // but usually modifying the objects + d3Reheat is enough for positions, 
-            // for colors we might need to trigger a prop update.
-            // However, since we modified __threeObj directly, that part is done.
-            // For the sphere, we rely on the accessor.
-            fgRef.current.refresh();
+        const controls = fg.controls();
+        if (controls) {
+            controls.enableDamping = true;
+            controls.dampingFactor = 0.12;
+            controls.autoRotateSpeed = AUTO_ROTATE_SPEED;
+            controls.autoRotate = autoRotateRef.current;
         }
-    }, [highlightedNodes, data]);
+
+        const timer = setTimeout(() => fitAll(1000), 900);
+        return () => clearTimeout(timer);
+    }, [data, isReady, fitAll]);
+
+    useEffect(() => {
+        const controls = fgRef.current?.controls();
+        if (controls) controls.autoRotate = autoRotate;
+    }, [autoRotate]);
+
+    // Fly to the selected node, framed with its neighbourhood
+    useEffect(() => {
+        if (!selectedId) return;
+        const neighbours = (analysis.neighbors.get(selectedId) || []).map((n) => n.id).filter((id) => id !== ROOT_ID);
+        frameNodes([selectedId, ...neighbours]);
+    }, [selectedId, analysis, frameNodes]);
+
+    // Frame whatever the latest answer lit up
+    useEffect(() => {
+        if (highlightedNodes.length) frameNodes(highlightedNodes, 1300);
+    }, [highlightedNodes, frameNodes]);
 
     useEffect(() => {
         const updateDimensions = () => {
             if (containerRef.current) {
                 setDimensions({
-                    width: containerRef.current.clientWidth, // Use clientWidth for better mobile sizing (excludes scrollbar)
-                    height: containerRef.current.clientHeight
+                    width: containerRef.current.clientWidth,
+                    height: containerRef.current.clientHeight,
                 });
             }
         };
-
         updateDimensions();
-
-        // Add robust resize handling
-        window.addEventListener('resize', updateDimensions);
-        window.addEventListener('orientationchange', updateDimensions); // Specific for mobile
-
         const observer = new ResizeObserver(updateDimensions);
-        if (containerRef.current) {
-            observer.observe(containerRef.current);
-        }
-
+        if (containerRef.current) observer.observe(containerRef.current);
+        window.addEventListener('orientationchange', updateDimensions);
         return () => {
-            window.removeEventListener('resize', updateDimensions);
-            window.removeEventListener('orientationchange', updateDimensions);
             observer.disconnect();
+            window.removeEventListener('orientationchange', updateDimensions);
+            clearTimeout(rotateTimerRef.current);
         };
     }, []);
 
-    const handleZoomIn = () => {
-        if (fgRef.current) {
-            const currentPos = fgRef.current.cameraPosition();
-            fgRef.current.cameraPosition(
-                { x: currentPos.x * 0.8, y: currentPos.y * 0.8, z: currentPos.z * 0.8 },
-                null,
-                500
-            );
-        }
+    const zoomBy = (factor) => {
+        const fg = fgRef.current;
+        if (!fg) return;
+        const pos = fg.cameraPosition();
+        const target = fg.controls()?.target || { x: 0, y: 0, z: 0 };
+        pauseAutoRotate(450);
+        fg.cameraPosition(
+            {
+                x: target.x + (pos.x - target.x) * factor,
+                y: target.y + (pos.y - target.y) * factor,
+                z: target.z + (pos.z - target.z) * factor,
+            },
+            null,
+            450
+        );
     };
 
-    const handleZoomOut = () => {
-        if (fgRef.current) {
-            const currentPos = fgRef.current.cameraPosition();
-            fgRef.current.cameraPosition(
-                { x: currentPos.x * 1.2, y: currentPos.y * 1.2, z: currentPos.z * 1.2 },
-                null,
-                500
-            );
-        }
-    };
+    const controlButton = (active) =>
+        `flex h-9 w-9 items-center justify-center rounded-xl transition-colors ${active ? 'bg-aurora-teal/15 text-aurora-teal' : 'text-slate-400 hover:bg-white/[0.06] hover:text-white'}`;
 
     return (
-        <div ref={containerRef} className="w-full h-full relative overflow-hidden">
-            {dimensions.width > 0 && (
+        <div
+            ref={containerRef}
+            className="relative h-full w-full overflow-hidden bg-[radial-gradient(ellipse_at_center,#0e1426_0%,#05070d_70%)]"
+            style={{ cursor: hoverId ? 'pointer' : 'grab' }}
+        >
+            <div className="pointer-events-none absolute inset-0 dot-grid opacity-60" />
+            {isReady && (
                 <ForceGraph3D
                     ref={fgRef}
                     width={dimensions.width}
                     height={dimensions.height}
                     graphData={data}
-                    nodeLabel="id"
-                    nodeRelSize={6}
-                    nodeVal={node => highlightedNodes.includes(node.id) ? 4 : 1}
-                    nodeColor={node => highlightedNodes.includes(node.id) ? '#86efac' : '#3b82f6'}
-                    nodeThreeObjectExtend={true}
-                    nodeThreeObject={node => {
-                        const isHighlighted = highlightedNodes.includes(node.id);
-                        const sprite = new SpriteText(node.id);
-                        sprite.color = isHighlighted ? '#86efac' : 'white'; // Light Green
-                        sprite.textHeight = isHighlighted ? 5 : 4;
-                        sprite.padding = 2; // Add some padding
-                        sprite.backgroundColor = isHighlighted ? 'rgba(134, 239, 172, 0.2)' : 'rgba(0,0,0,0.5)';
-                        sprite.borderRadius = 4;
-                        sprite.position.y = isHighlighted ? 10 : 10; // Offset higher for larger nodes
-                        return sprite;
-                    }}
-                    linkColor={link => {
-                        const isHighlighted = highlightedNodes.includes(link.source.id) || highlightedNodes.includes(link.target.id);
-                        return isHighlighted ? '#4ade80' : 'rgba(255,255,255,0.5)';
-                    }}
-                    linkWidth={link => {
-                        const isHighlighted = highlightedNodes.includes(link.source.id) || highlightedNodes.includes(link.target.id);
-                        return isHighlighted ? 3 : 1.5;
-                    }}
-                    linkDirectionalParticles={2}
-                    linkDirectionalParticleSpeed={0.005}
-                    backgroundColor="#0f172a"
+                    backgroundColor="rgba(0,0,0,0)"
                     showNavInfo={false}
-                    onNodeClick={node => {
-                        // Focus on node
-                        const distance = 225;
-                        const distRatio = 1 + distance / Math.hypot(node.x, node.y, node.z);
-                        fgRef.current.cameraPosition(
-                            { x: node.x * distRatio, y: node.y * distRatio, z: node.z * distRatio },
-                            node,
-                            3000
-                        );
-                    }}
+                    controlType="orbit"
+                    warmupTicks={60}
+                    nodeLabel={() => ''}
+                    nodeThreeObject={nodeThreeObject}
+                    linkColor={linkColor}
+                    linkWidth={linkWidth}
+                    linkOpacity={1}
+                    linkLabel={linkLabel}
+                    linkDirectionalParticles={linkParticles}
+                    linkDirectionalParticleWidth={2.6}
+                    linkDirectionalParticleSpeed={0.006}
+                    linkDirectionalParticleColor={linkParticleColor}
+                    onNodeHover={(node) => setHoverId(node ? node.id : null)}
+                    onNodeClick={(node) => onSelect(node.id)}
+                    onBackgroundClick={() => onSelect(null)}
                 />
             )}
-            <div className="absolute top-4 left-4 glass-panel p-4 max-w-xs pointer-events-none">
-                <h3 className="text-sm md:text-lg font-bold text-blue-400">Knowledge Graph</h3>
-                <p className="hidden md:block text-sm text-gray-400">
-                    Interactive 3D visualization of extracted concepts. Click a node to focus.
-                </p>
+
+            {/* Legend */}
+            <div className="pointer-events-none absolute bottom-4 left-4 hidden items-center gap-4 rounded-full border border-white/[0.06] bg-ink-950/60 px-4 py-2 backdrop-blur-md md:flex">
+                {['hub', 'concept', 'detail'].map((tier) => (
+                    <span key={tier} className="flex items-center gap-1.5 text-[11px] text-slate-400">
+                        <span className="h-2 w-2 rounded-full" style={{ background: TIER_COLORS[tier], boxShadow: `0 0 8px ${TIER_COLORS[tier]}` }} />
+                        {TIER_LABELS[tier]}
+                    </span>
+                ))}
+                <span className="flex items-center gap-1.5 text-[11px] text-slate-400">
+                    <span className="h-2 w-2 rounded-full bg-signal shadow-[0_0_8px_#f472b6]" />
+                    In answer
+                </span>
+                <span className="h-3 w-px bg-white/10" />
+                <span className="font-mono text-[10.5px] text-slate-500">drag to orbit · scroll to zoom · click a node</span>
             </div>
 
-            // Controls Container - Bottom Right (Zoom)
-            <div className="absolute bottom-8 right-8 flex flex-col gap-2">
-                <button
-                    onClick={handleZoomIn}
-                    className="w-8 h-8 bg-gray-800 hover:bg-gray-700 text-white rounded-full shadow-lg transition border border-gray-600 flex items-center justify-center p-0"
-                    title="Zoom In"
-                >
-                    <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>
+            {/* Camera controls */}
+            <div className="glass absolute bottom-24 right-3 flex flex-col gap-0.5 rounded-2xl p-1 md:bottom-4 md:right-4">
+                <button onClick={() => zoomBy(0.75)} className={controlButton(false)} title="Zoom in" aria-label="Zoom in"><Plus size={17} /></button>
+                <button onClick={() => zoomBy(1.33)} className={controlButton(false)} title="Zoom out" aria-label="Zoom out"><Minus size={17} /></button>
+                <button onClick={() => fitAll()} className={controlButton(false)} title="Fit graph to view" aria-label="Fit graph to view"><Maximize size={15} /></button>
+                <span className="mx-2 my-0.5 h-px bg-white/10" />
+                <button onClick={() => setAutoRotate((v) => !v)} className={controlButton(autoRotate)} title={autoRotate ? 'Stop rotating' : 'Auto-rotate'} aria-label="Toggle auto-rotate" aria-pressed={autoRotate}>
+                    <Rotate3d size={16} />
                 </button>
-                <button
-                    onClick={handleZoomOut}
-                    className="w-8 h-8 bg-gray-800 hover:bg-gray-700 text-white rounded-full shadow-lg transition border border-gray-600 flex items-center justify-center p-0"
-                    title="Zoom Out"
-                >
-                    <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="5" y1="12" x2="19" y2="12"></line></svg>
+                <button onClick={() => setLabelMode((m) => (m === 'all' ? 'smart' : 'all'))} className={controlButton(labelMode === 'all')} title={labelMode === 'all' ? 'Show only key labels' : 'Show all labels'} aria-label="Toggle labels" aria-pressed={labelMode === 'all'}>
+                    <Tags size={16} />
                 </button>
-            </div>
-
-            {/* D-Pad - Bottom Left */}
-            <div className="absolute bottom-8 left-8 flex flex-col items-center gap-1">
-                <button onClick={() => handlePan('up')} className="p-2 bg-gray-800 hover:bg-gray-700 text-white rounded-lg shadow-lg border border-gray-600 active:bg-gray-600">
-                    <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="18 15 12 9 6 15"></polyline></svg>
-                </button>
-                <div className="flex gap-2">
-                    <button onClick={() => handlePan('left')} className="p-2 bg-gray-800 hover:bg-gray-700 text-white rounded-lg shadow-lg border border-gray-600 active:bg-gray-600">
-                        <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="15 18 9 12 15 6"></polyline></svg>
-                    </button>
-                    <button onClick={() => handlePan('down')} className="p-2 bg-gray-800 hover:bg-gray-700 text-white rounded-lg shadow-lg border border-gray-600 active:bg-gray-600">
-                        <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="6 9 12 15 18 9"></polyline></svg>
-                    </button>
-                    <button onClick={() => handlePan('right')} className="p-2 bg-gray-800 hover:bg-gray-700 text-white rounded-lg shadow-lg border border-gray-600 active:bg-gray-600">
-                        <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="9 18 15 12 9 6"></polyline></svg>
-                    </button>
-                </div>
             </div>
         </div>
     );

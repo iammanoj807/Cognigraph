@@ -1,162 +1,225 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useMemo, useCallback } from 'react';
+import { FileText, FilePlus2, MessagesSquare } from 'lucide-react';
 import GraphView from './components/GraphView';
 import ChatInterface from './components/ChatInterface';
 import WelcomeScreen from './components/WelcomeScreen';
-import { MessageSquare, ChevronLeft, ChevronRight } from 'lucide-react';
-import axios from 'axios';
+import NodeInspector from './components/NodeInspector';
+import GraphSearch from './components/GraphSearch';
+import { api } from './lib/api';
+import { analyzeGraph } from './lib/graph';
+import { DEFAULT_CHAIN, PROVIDER_META, describeRoute, formatLatency } from './lib/providers';
 
-// Utils: Generate or retrieve Session ID for isolation
-const getSessionId = () => {
-  let sid = localStorage.getItem('cognigraph-session-id');
-  if (!sid) {
-    // Simple UUID Fallback
-    sid = crypto.randomUUID ? crypto.randomUUID() : Math.random().toString(36).substring(2) + Date.now().toString(36);
-    localStorage.setItem('cognigraph-session-id', sid);
-  }
-  return sid;
+const MOBILE_QUERY = '(max-width: 767px)';
+const EMPTY_GRAPH = { nodes: [], links: [] };
+
+const useIsMobile = () => {
+    const [isMobile, setIsMobile] = useState(() => window.matchMedia(MOBILE_QUERY).matches);
+    useEffect(() => {
+        const mq = window.matchMedia(MOBILE_QUERY);
+        const onChange = () => setIsMobile(mq.matches);
+        mq.addEventListener('change', onChange);
+        return () => mq.removeEventListener('change', onChange);
+    }, []);
+    return isMobile;
 };
 
-// Configure Axios to always send Session ID
-axios.defaults.headers.common['X-Session-ID'] = getSessionId();
-
 function App() {
-  const [graphData, setGraphData] = useState({ nodes: [], links: [] });
-  const [highlightedNodes, setHighlightedNodes] = useState([]);
+    const isMobile = useIsMobile();
+    const [graphData, setGraphData] = useState(EMPTY_GRAPH);
+    const [documentInfo, setDocumentInfo] = useState(null);
+    const [chain, setChain] = useState(DEFAULT_CHAIN);
+    const [graphEngine, setGraphEngine] = useState(null); // which provider built the graph
+    const [lastEngine, setLastEngine] = useState(null); // which provider answered last
+    const [highlightedNodes, setHighlightedNodes] = useState([]);
+    const [selectedId, setSelectedId] = useState(null);
+    const [chatOpen, setChatOpen] = useState(() => !window.matchMedia(MOBILE_QUERY).matches);
+    const [pendingQuestion, setPendingQuestion] = useState(null);
+    const [autoTriggerUpload, setAutoTriggerUpload] = useState(false);
+    const [documentKey, setDocumentKey] = useState(0);
 
-  // Responsive State: Tracks if window is mobile-sized
-  const [isMobile, setIsMobile] = useState(window.innerWidth < 768);
+    const refreshProviders = useCallback(() => {
+        api.get('/providers')
+            .then((res) => res.data?.chain && setChain(res.data.chain))
+            .catch((err) => console.error('Failed to load providers', err));
+    }, []);
 
-  // Desktop State: Track if chat sidebar is open
-  const [isDesktopChatOpen, setIsDesktopChatOpen] = useState(true);
+    useEffect(() => {
+        // Initial load - Reset session to ensure fresh start
+        api.post('/reset').catch((err) => console.error('Failed to reset session', err));
+        refreshProviders();
+    }, [refreshProviders]);
 
-  useEffect(() => {
-    // Initial load - Reset session to ensure fresh start
-    const API_URL = import.meta.env.VITE_API_URL || '';
-    axios.post(`${API_URL}/reset`)
-      .then(res => setGraphData(res.data))
-      .catch(err => console.error("Failed to reset session", err));
+    useEffect(() => {
+        const onKey = (e) => e.key === 'Escape' && setSelectedId(null);
+        window.addEventListener('keydown', onKey);
+        return () => window.removeEventListener('keydown', onKey);
+    }, []);
 
-    // Handle Resize for Responsive Layout
-    const handleWindowResize = () => {
-      setIsMobile(window.innerWidth < 768);
+    const analysis = useMemo(() => analyzeGraph(graphData), [graphData]);
+    const hasGraph = graphData.nodes.length > 0;
+
+    const suggestions = useMemo(() => {
+        const [a, b, c] = analysis.hubs;
+        const list = ['Give me a short summary of this document.'];
+        if (a) list.push(`What does the document say about ${a}?`);
+        if (a && b) list.push(`How are ${a} and ${b} connected?`);
+        if (c) list.push(`What are the key facts about ${c}?`);
+        return list;
+    }, [analysis]);
+
+    const handleUploadSuccess = ({ nodes, links, engine, document }) => {
+        setGraphData({ nodes, links });
+        setDocumentInfo(document || null);
+        setGraphEngine(engine || null);
+        setLastEngine(engine || null);
+        setHighlightedNodes([]);
+        setSelectedId(null);
+        setAutoTriggerUpload(false);
+        setPendingQuestion(null);
+        setDocumentKey((k) => k + 1);
     };
-    window.addEventListener('resize', handleWindowResize);
-    return () => window.removeEventListener('resize', handleWindowResize);
-  }, []);
 
-  const [activeMobileTab, setActiveMobileTab] = useState('graph'); // 'graph' or 'chat' for mobile
-  const sidebarRef = useRef(null);
-  const SIDEBAR_WIDTH = 450; // Fixed width for desktop chat sidebar
+    // Resets the current session to allow a new file upload
+    const handleNewDocument = () => {
+        setGraphData(EMPTY_GRAPH);
+        setHighlightedNodes([]);
+        setSelectedId(null);
+        setAutoTriggerUpload(true); // Auto-open file dialog on next render
+        refreshProviders();
+    };
 
-  const [autoTriggerUpload, setAutoTriggerUpload] = useState(false);
+    const askAbout = (text) => {
+        setPendingQuestion({ text, nonce: Date.now() });
+        setChatOpen(true);
+    };
 
-  // Resets the current session to allow a new file upload
-  const handleResetSession = () => {
-    setGraphData({ nodes: [], links: [] });
-    setHighlightedNodes([]);
-    setAutoTriggerUpload(true); // Auto-open file dialog on next render
-  };
+    const focusNode = (id) => {
+        setSelectedId(id);
+        if (isMobile) setChatOpen(false);
+    };
 
-  return (
-    <div className="flex flex-col md:flex-row h-[100dvh] w-full bg-[#0f172a] text-white overflow-hidden relative">
+    if (!hasGraph) {
+        return (
+            <div className="h-[100dvh] w-full bg-ink-950 text-white">
+                <WelcomeScreen
+                    onUploadSuccess={handleUploadSuccess}
+                    onUploadError={refreshProviders}
+                    autoTrigger={autoTriggerUpload}
+                    chain={chain}
+                />
+            </div>
+        );
+    }
 
-      {/* 
-        MAIN CONTENT AREA (Graph / Welcome)
-        Desktop: Flex-1 (Takes remaining space)
-        Mobile: 
-          - Default: h-[60vh]
-          - Chat Expanded: h-0/hidden (to give full space to chat)
-      */}
-      <div
-        className={`
-            relative order-1 md:order-1 transition-all duration-300 ease-in-out min-w-0
-            ${isMobile
-            ? 'absolute inset-0 z-0 h-full w-full' // Mobile: Full screen absolute
-            : 'h-full md:flex-1' // Desktop: Flex share (removed fixed w-full to prevent overflow)
-          }
-        `}
-      >
+    const builder = graphEngine && PROVIDER_META[graphEngine.provider];
 
-        {graphData.nodes?.length > 0 ? (
-          <>
-            <GraphView data={graphData} highlightedNodes={highlightedNodes} />
+    return (
+        <div className="flex h-[100dvh] w-full overflow-hidden bg-ink-950 text-white">
+            {/* Graph stage */}
+            <div className="relative min-w-0 flex-1">
+                <GraphView
+                    data={graphData}
+                    analysis={analysis}
+                    documentName={documentInfo?.name}
+                    highlightedNodes={highlightedNodes}
+                    selectedId={selectedId}
+                    onSelect={setSelectedId}
+                />
 
-            {/* Floating Upload Button */}
-            <button
-              onClick={handleResetSession}
-              className="absolute top-4 right-4 z-20 md:right-8 p-3 bg-gray-800/80 hover:bg-blue-600 backdrop-blur-md text-white rounded-xl shadow-lg border border-gray-600 hover:border-blue-500 transition-all duration-200 flex items-center gap-2 group"
-              title="Upload New Document"
+                {/* Top bar */}
+                <div className="pointer-events-none absolute inset-x-0 top-0 z-20 flex flex-col gap-2 p-3 md:flex-row md:items-start md:gap-3 md:p-4">
+                    <div className="pointer-events-auto flex min-w-0 items-center gap-2 md:gap-3">
+                        <div className="glass flex h-11 shrink-0 items-center gap-2 rounded-2xl px-3">
+                            <img src="/graph-favicon.svg" alt="" className="h-5 w-5" />
+                            <span className="hidden font-display text-[15px] font-semibold tracking-tight lg:inline">CogniGraph</span>
+                        </div>
+
+                        <div className="glass flex h-11 min-w-0 items-center gap-2.5 rounded-2xl px-3.5" title={graphEngine ? `Graph built via: ${describeRoute(graphEngine)}` : undefined}>
+                            <FileText size={15} className="shrink-0 text-aurora-teal" />
+                            <span className="min-w-0 max-w-[140px] truncate text-[13px] font-medium text-white sm:max-w-[220px]">{documentInfo?.name || 'Document'}</span>
+                            <span className="hidden shrink-0 font-mono text-[11px] text-slate-500 sm:inline">
+                                {analysis.nodeCount} concepts · {analysis.linkCount} links
+                            </span>
+                            {builder && (
+                                <span className="hidden shrink-0 items-center gap-1.5 border-l border-white/10 pl-2.5 font-mono text-[11px] text-slate-500 xl:inline-flex">
+                                    <span className="h-1.5 w-1.5 rounded-full" style={{ background: builder.color, boxShadow: `0 0 8px ${builder.color}` }} />
+                                    built by {builder.name} {formatLatency(graphEngine.latency_ms)}
+                                </span>
+                            )}
+                        </div>
+
+                        <button onClick={handleNewDocument} className="glass flex h-11 shrink-0 items-center gap-2 rounded-2xl px-3 text-[13px] text-slate-300 transition hover:text-white md:ml-0" title="Upload a new document">
+                            <FilePlus2 size={16} />
+                            <span className="hidden sm:inline">New</span>
+                        </button>
+                    </div>
+
+                    <div className="pointer-events-auto flex items-start gap-2 md:ml-auto">
+                        <GraphSearch nodes={graphData.nodes} analysis={analysis} onSelect={focusNode} className="flex-1 md:w-64 md:flex-none" />
+                        {!chatOpen && !isMobile && (
+                            <button onClick={() => setChatOpen(true)} className="glass flex h-11 items-center gap-2 rounded-2xl px-3.5 text-[13px] font-medium text-white transition hover:border-aurora-teal/40 animate-fade-in">
+                                <MessagesSquare size={16} className="text-aurora-teal" />
+                                Ask
+                            </button>
+                        )}
+                    </div>
+                </div>
+
+                {/* Node inspector */}
+                {selectedId && (
+                    <div className="absolute inset-x-3 bottom-3 z-30 md:inset-x-auto md:bottom-auto md:left-4 md:top-[76px]">
+                        <NodeInspector
+                            nodeId={selectedId}
+                            analysis={analysis}
+                            isLit={highlightedNodes.includes(selectedId)}
+                            onSelect={setSelectedId}
+                            onAsk={askAbout}
+                            onClose={() => setSelectedId(null)}
+                        />
+                    </div>
+                )}
+
+                {/* Mobile: open chat */}
+                {isMobile && !chatOpen && !selectedId && (
+                    <button
+                        onClick={() => setChatOpen(true)}
+                        className="absolute bottom-5 left-1/2 z-20 flex -translate-x-1/2 items-center gap-2 rounded-full bg-gradient-to-r from-aurora-teal to-aurora-violet px-5 py-3 text-sm font-semibold text-ink-950 shadow-[0_10px_40px_-8px_rgba(94,234,212,0.6)] animate-fade-up"
+                    >
+                        <MessagesSquare size={17} />
+                        Ask the graph
+                    </button>
+                )}
+            </div>
+
+            {/* Chat: a floating column on desktop, a full-screen sheet on mobile. Always mounted so the conversation survives closing it. */}
+            <aside
+                className={
+                    isMobile
+                        ? `fixed inset-0 z-40 bg-ink-950 ${chatOpen ? 'animate-fade-up' : 'hidden'}`
+                        : 'relative shrink-0 overflow-hidden transition-[width] duration-500 ease-[cubic-bezier(0.22,1,0.36,1)]'
+                }
+                style={isMobile ? undefined : { width: chatOpen ? 432 : 0 }}
+                inert={!chatOpen}
             >
-              <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="group-hover:rotate-180 transition-transform duration-500"><path d="M21 12a9 9 0 0 0-9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"></path><path d="M3 3v5h5"></path><path d="M3 12a9 9 0 0 0 9 9 9.75 9.75 0 0 0 6.74-2.74L21 16"></path><path d="M16 21h5v-5"></path></svg>
-              <span className="text-sm font-medium hidden sm:inline">Upload New</span>
-            </button>
-          </>
-        ) : (
-          <WelcomeScreen
-            onUploadSuccess={setGraphData}
-            autoTrigger={autoTriggerUpload}
-            onOpenChat={() => setActiveMobileTab('chat')}
-          />
-        )}
-      </div>
-
-      {/* Mobile Floating Toggle for Chat (Only show when Graph is active) */}
-      {isMobile && activeMobileTab === 'graph' && graphData.nodes?.length > 0 && (
-        <button
-          onClick={() => setActiveMobileTab('chat')}
-          className="absolute bottom-24 left-1/2 -translate-x-1/2 z-20 text-blue-400 hover:text-blue-300 font-medium flex items-center gap-2 bg-gray-900/80 backdrop-blur-sm px-4 py-2 rounded-full border border-blue-500/30 transition-all duration-300"
-        >
-          <MessageSquare size={20} />
-          <span>Open Chat</span>
-        </button>
-      )}
-
-      {/* 
-        DESKTOP CHAT TOGGLE BUTTON
-        Visible only on Desktop (md:flex)
-        Positions itself relative to the sidebar edge.
-       */}
-      {!isMobile && (
-        <button
-          onClick={() => setIsDesktopChatOpen(prev => !prev)}
-          className="hidden md:flex absolute top-[50%] -translate-y-1/2 z-40 items-center justify-center w-8 h-12 bg-gray-800 border border-gray-600 border-r-0 rounded-l-lg hover:bg-blue-600 hover:border-blue-500 text-gray-400 hover:text-white transition-all duration-300 shadow-xl"
-          style={{ right: isDesktopChatOpen ? SIDEBAR_WIDTH : 0 }}
-          title={isDesktopChatOpen ? "Close Chat" : "Open Chat"}
-        >
-          {isDesktopChatOpen ? <ChevronRight size={20} /> : <ChevronLeft size={20} />}
-        </button>
-      )}
-
-      {/* 
-        RIGHT SIDEBAR (Chat)
-        Desktop: Fixed width 400px (or 0px if closed)
-        Mobile: 
-          - Default: h-[40vh] (bottom sheet)
-          - Expanded: h-full (covers screen)
-      */}
-      <div
-        className={`
-            w-full md:h-full bg-gray-900 border-t md:border-t-0 md:border-l border-gray-700 z-10 shadow-2xl transition-all duration-300 ease-in-out flex flex-col order-2 md:order-3
-            ${isMobile
-            ? (activeMobileTab === 'chat' ? 'absolute inset-0 h-full z-30' : 'hidden') // Mobile: Overlay or Hidden
-            : 'relative' // Desktop: Relative to flow
-          }
-        `}
-        style={!isMobile ? { width: isDesktopChatOpen ? SIDEBAR_WIDTH : 0, overflow: 'hidden' } : {}}
-        ref={sidebarRef}
-      >
-        <div style={{ minWidth: isMobile ? '100%' : SIDEBAR_WIDTH, height: '100%' }}> {/* Wrapper to prevent content squishing during transition */}
-          <ChatInterface
-            onNewGraphData={setGraphData}
-            onHighlightNodes={setHighlightedNodes}
-            hasUploadedDocument={graphData.nodes.length > 0}
-            isMobileExpanded={activeMobileTab === 'chat'}
-            onToggleMobileExpand={() => setActiveMobileTab(prev => prev === 'chat' ? 'graph' : 'chat')}
-          />
+                <div className={isMobile ? 'h-full' : 'h-full w-[432px] py-3 pr-3'}>
+                    <div className={isMobile ? 'h-full' : 'glass h-full overflow-hidden rounded-3xl'}>
+                        <ChatInterface
+                            key={documentKey}
+                            chain={chain}
+                            lastEngine={lastEngine}
+                            documentName={documentInfo?.name}
+                            suggestions={suggestions}
+                            pendingQuestion={pendingQuestion}
+                            onEngine={setLastEngine}
+                            onHighlightNodes={setHighlightedNodes}
+                            onFocusNode={focusNode}
+                            onClose={() => setChatOpen(false)}
+                        />
+                    </div>
+                </div>
+            </aside>
         </div>
-      </div>
-    </div>
-  );
+    );
 }
 
 export default App;

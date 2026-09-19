@@ -4,6 +4,7 @@ python-multipart
 pydantic
 networkx
 python-dotenv
+requests
 chromadb
 sentence-transformers
 pypdf

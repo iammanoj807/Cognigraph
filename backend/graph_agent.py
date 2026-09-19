@@ -3,6 +3,75 @@ import json
 import re
 from llm_client import query_llm
 
+ROOT_NODE = "Document"
+
+# Cap on relationships sent as chat context, keeping prompts inside Groq's free-tier token budget.
+MAX_CONTEXT_EDGES = 120
+
+
+def parse_triples(raw_content):
+    """
+    Recovers triples from model output, even when the JSON is malformed.
+    Returns a list of {"source", "target", "relation"} dicts (possibly empty).
+    """
+    # Clean up markdown code blocks if present
+    cleaned_content = raw_content.replace('```json', '').replace('```', '').strip()
+
+    def valid(items):
+        return [t for t in items if isinstance(t, dict) and t.get('source') and t.get('target')]
+
+    # Tier 1: Direct JSON parse
+    try:
+        data = json.loads(cleaned_content)
+        if isinstance(data, dict):
+            triples = valid(data.get("triples", []))
+            if triples:
+                return triples
+    except Exception as e:
+        print(f"Tier 1 JSON parse failed: {e}")
+
+    # Tier 2: Syntax repair (fix missing commas between objects, trailing commas, unclosed brackets)
+    try:
+        repaired = re.sub(r'\}\s*\{', '},\n{', cleaned_content)
+        repaired = re.sub(r',\s*([\]\}])', r'\1', repaired)
+        if '[' in repaired and ']' not in repaired:
+            last_brace = repaired.rfind('}')
+            if last_brace != -1:
+                repaired = repaired[:last_brace+1] + '\n]}'
+        elif '{' in repaired and '}' not in repaired:
+            repaired = repaired + '\n}'
+
+        data = json.loads(repaired)
+        if isinstance(data, dict):
+            triples = valid(data.get("triples", []))
+            if triples:
+                print(f"Tier 2 JSON repair succeeded: recovered {len(triples)} triples.")
+                return triples
+    except Exception as e:
+        print(f"Tier 2 JSON repair failed: {e}")
+
+    # Tier 3: Resilient regex extraction (extracts individual triples even if outer JSON is broken)
+    print("Tier 3: Attempting resilient regex extraction...")
+    triples = []
+    for block in re.finditer(r'\{([^{}]+)\}', cleaned_content, re.DOTALL):
+        block_text = block.group(1)
+        src_m = re.search(r'\"source\"\s*:\s*\"(.*?)\"(?:\s*,|\s*\}|\s*$)', block_text, re.DOTALL)
+        tgt_m = re.search(r'\"target\"\s*:\s*\"(.*?)\"(?:\s*,|\s*\}|\s*$)', block_text, re.DOTALL)
+        rel_m = re.search(r'\"relation\"\s*:\s*\"(.*?)\"(?:\s*,|\s*\}|\s*$)', block_text, re.DOTALL)
+        if src_m and tgt_m and rel_m:
+            src = src_m.group(1).strip()
+            tgt = tgt_m.group(1).strip()
+            rel = rel_m.group(1).strip()
+            if src and tgt:
+                triples.append({'source': src, 'target': tgt, 'relation': rel})
+
+    if triples:
+        print(f"Tier 3 regex extraction succeeded: recovered {len(triples)} triples.")
+    else:
+        print("WARNING: Extracted triples list is empty.")
+    return triples
+
+
 class GraphAgent:
     def __init__(self):
         self.graph = nx.DiGraph()
@@ -10,7 +79,7 @@ class GraphAgent:
     def extract_graph_from_text(self, text: str):
         """
         Extract entities/relations using the configured LLM and build the graph.
-        Returns: Tuple(triples, rate_limit_info)
+        Returns: Tuple(triples, engine) where engine names the provider that answered.
         """
         self.graph.clear()
         
@@ -63,89 +132,44 @@ class GraphAgent:
             {"role": "user", "content": prompt_text}
         ]
 
+        # Parsed during validation so a provider whose output has no usable
+        # triples counts as a failure and the chain moves on to the next one.
+        parsed = {}
+
+        def has_triples(content):
+            parsed["triples"] = parse_triples(content)
+            return bool(parsed["triples"])
+
         try:
-            # Query LLM to get graph structure
-            raw_content, rate_limits = query_llm(
-                messages=messages, 
-                model="gemini-3.6-flash",
+            raw_content, engine = query_llm(
+                messages=messages,
                 json_mode=True,
-                max_tokens=4000
+                max_tokens=6000,
+                timeout=120,
+                validate=has_triples,
             )
-
-            # Clean up markdown code blocks if present
-            cleaned_content = raw_content.replace('```json', '').replace('```', '').strip()
-            
-            triples = []
-            
-            # Tier 1: Direct JSON parse
-            try:
-                data = json.loads(cleaned_content)
-                if isinstance(data, dict):
-                    triples = data.get("triples", [])
-            except Exception as e:
-                print(f"Tier 1 JSON parse failed: {e}")
-
-            # Tier 2: Syntax repair (fix missing commas between objects, trailing commas, unclosed brackets)
-            if not triples:
-                try:
-                    repaired = re.sub(r'\}\s*\{', '},\n{', cleaned_content)
-                    repaired = re.sub(r',\s*([\]\}])', r'\1', repaired)
-                    if '[' in repaired and ']' not in repaired:
-                        last_brace = repaired.rfind('}')
-                        if last_brace != -1:
-                            repaired = repaired[:last_brace+1] + '\n]}'
-                    elif '{' in repaired and '}' not in repaired:
-                        repaired = repaired + '\n}'
-                    
-                    data = json.loads(repaired)
-                    if isinstance(data, dict):
-                        triples = data.get("triples", [])
-                        print(f"Tier 2 JSON repair succeeded: recovered {len(triples)} triples.")
-                except Exception as e:
-                    print(f"Tier 2 JSON repair failed: {e}")
-
-            # Tier 3: Resilient regex extraction (extracts individual triples even if outer JSON is broken)
-            if not triples:
-                print("Tier 3: Attempting resilient regex extraction...")
-                for block in re.finditer(r'\{([^{}]+)\}', cleaned_content, re.DOTALL):
-                    block_text = block.group(1)
-                    src_m = re.search(r'\"source\"\s*:\s*\"(.*?)\"(?:\s*,|\s*\})', block_text, re.DOTALL)
-                    tgt_m = re.search(r'\"target\"\s*:\s*\"(.*?)\"(?:\s*,|\s*\})', block_text, re.DOTALL)
-                    rel_m = re.search(r'\"relation\"\s*:\s*\"(.*?)\"(?:\s*,|\s*\})', block_text, re.DOTALL)
-                    if src_m and tgt_m and rel_m:
-                        src = src_m.group(1).strip()
-                        tgt = tgt_m.group(1).strip()
-                        rel = rel_m.group(1).strip()
-                        if src and tgt:
-                            triples.append({'source': src, 'target': tgt, 'relation': rel})
-                
-                if triples:
-                    print(f"Tier 3 regex extraction succeeded: recovered {len(triples)} triples.")
-
-            if not triples:
-                print("WARNING: Extracted triples list is empty.")
-                return [], rate_limits
+            triples = parsed["triples"]
 
             # Build graph
             temp_graph = nx.Graph()
-            root_node = "Document"
+            root_node = ROOT_NODE
             temp_graph.add_node(root_node, group=0)
 
             for item in triples:
-                if not isinstance(item, dict) or 'source' not in item or 'target' not in item or 'relation' not in item:
-                    continue    
-                src = item['source']
-                tgt = item['target']
-                rel = item['relation']
-                if not src or not tgt:
+                src = str(item['source']).strip()
+                tgt = str(item['target']).strip()
+                rel = str(item.get('relation') or 'related to').strip()
+                if not src or not tgt or src == tgt:
                     continue
-                temp_graph.add_node(src, group=1)
-                temp_graph.add_node(tgt, group=1)
+                for node in (src, tgt):
+                    if node != root_node:
+                        temp_graph.add_node(node, group=1)
                 temp_graph.add_edge(src, tgt, label=rel)
-                temp_graph.add_edge(root_node, src, label="contains")
+                if src != root_node:
+                    temp_graph.add_edge(root_node, src, label="contains")
             
             self.graph = temp_graph
-            return triples, rate_limits
+            return triples, engine
             
         except Exception as e:
             print(f"Error calling LLM: {e}")
@@ -167,9 +191,14 @@ class GraphAgent:
         if self.graph.number_of_edges() == 0:
             return ""
             
-        text = "Extracted Knowledge Graph Relationships:\n"
+        lines = []
         for u, v, data in self.graph.edges(data=True):
             label = data.get("label", "related to")
-            text += f"- {u} [{label}] {v}\n"
-        
-        return text
+            # The synthetic root "contains" edges carry no information from the document.
+            if ROOT_NODE in (u, v) and label == "contains":
+                continue
+            lines.append(f"- {u} [{label}] {v}")
+            if len(lines) >= MAX_CONTEXT_EDGES:
+                break
+
+        return "Extracted Knowledge Graph Relationships:\n" + "\n".join(lines) + "\n"

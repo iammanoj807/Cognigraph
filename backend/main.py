@@ -12,9 +12,9 @@ from pydantic import BaseModel
 from typing import List, Dict
 from dotenv import load_dotenv
 
-from graph_agent import GraphAgent
+from graph_agent import GraphAgent, ROOT_NODE
 from rag_engine import RAGEngine
-from llm_client import query_llm
+from llm_client import query_llm, provider_status, LLMChainError
 
 import io
 import pypdf
@@ -68,7 +68,6 @@ async def get_current_session(x_session_id: str = Header(...)):
 
 class ChatRequest(BaseModel):
     message: str
-    model_provider: str = "gemini-3.6-flash"
 
 class GraphResponse(BaseModel):
     nodes: List[dict]
@@ -77,6 +76,14 @@ class GraphResponse(BaseModel):
 @app.get("/health")
 def health_check():
     return {"status": "online", "message": "CogniGraph Backend is running"}
+
+@app.get("/providers")
+def get_providers():
+    """
+    The LLM fallback chain in order (Groq -> Gemini -> NVIDIA), with each
+    provider's model, whether its key is set, and any active rate-limit cooldown.
+    """
+    return {"chain": provider_status()}
 
 @app.get("/")
 def read_root():
@@ -178,22 +185,27 @@ async def upload_document(
     # 2. Extract Graph
     print("DEBUG: Starting Graph Extraction...")
     try:
-        _, rate_limits = session.graph_agent.extract_graph_from_text(text)
-        print(f"DEBUG: Rate Limits after upload: {rate_limits}")
+        _, engine = session.graph_agent.extract_graph_from_text(text)
+        print(f"DEBUG: Graph extracted by {engine['name']} ({engine['model']})")
+    except LLMChainError as e:
+        print(f"Error extracting graph: {e}")
+        raise HTTPException(status_code=429 if e.rate_limited else 502, detail=str(e))
     except Exception as e:
         print(f"Error extracting graph: {e}")
-        error_msg = str(e)
-        if "Rate Limit" in error_msg:
-             raise HTTPException(status_code=429, detail=error_msg)
-        raise HTTPException(status_code=500, detail=f"Graph extraction failed: {error_msg}")
+        raise HTTPException(status_code=500, detail=f"Graph extraction failed: {e}")
     
     graph_time = time.time()
     print(f"DEBUG: Graph Extraction took {graph_time - rag_time:.2f}s")
     print(f"DEBUG: Total processing time: {graph_time - start_time:.2f}s")
     
-    # Return actual graph data so frontend can render immediately
+    # Return actual graph data so frontend can render immediately,
+    # plus which provider in the fallback chain built it.
     graph_data = session.graph_agent.get_graph_data()
-    return graph_data
+    return {
+        **graph_data,
+        "engine": engine,
+        "document": {"name": file.filename, "characters": len(text)},
+    }
 
 
 
@@ -235,34 +247,42 @@ async def chat(request: ChatRequest, session: SessionData = Depends(get_current_
     
     # Use generic messages format
     messages = [
-        {"role": "system", "content": "You are a helpful assistant for a Knowledge Graph application. Use BOTH the 'Graph Relationships' and 'Document Excerpts' to answer. If the answer is NOT in the provided context, simply say 'This information is not available in the uploaded document.'"},
+        {"role": "system", "content": "You are a helpful assistant for a Knowledge Graph application. Use BOTH the 'Graph Relationships' and 'Document Excerpts' to answer. If the answer is NOT in the provided context, simply say 'This information is not available in the uploaded document.' Keep answers concise: short paragraphs or bullet lists, and avoid tables."},
         {
             "role": "user", 
             "content": f"Context:\n{context_str}\n\nUser Question: {request.message}\n\nAnswer ONLY using the information above. If the answer is not found, say so clearly."
         }
     ]
 
-    rate_limits = {}
+    engine = None
+    failed = False
     try:
-        response_text, rate_limits = query_llm(
+        response_text, engine = query_llm(
             messages=messages,
-            model="gemini-3.6-flash",
-            temperature=0.1
+            temperature=0.1,
+            max_tokens=1500,
+            timeout=60,
         )
 
-    except Exception as e:
+    except LLMChainError as e:
         print(f"Error generating chat response: {e}")
-        error_str = str(e)
-        if "413" in error_str or "Payload Too Large" in error_str:
+        failed = True
+        engine = {"provider": None, "name": None, "model": None, "attempts": e.attempts}
+        if e.rate_limited:
+            response_text = f"Every AI provider is rate-limited right now. Please wait {e.retry_after}s and try again."
+        elif any(a["status"] == "too_large" for a in e.attempts):
             response_text = "The question or context is too long. Please try shortening your query."
-        elif "rate limit" in error_str.lower() or "429" in error_str:
-             response_text = "API Rate Limit reached. Please wait a moment and try again."
         else:
             response_text = "I encountered a technical issue while processing your request. Please try again."
+    except Exception as e:
+        print(f"Error generating chat response: {e}")
+        failed = True
+        response_text = "I encountered a technical issue while processing your request. Please try again."
 
     # Identify highlighted nodes
-    if session.graph_agent.graph:
-        all_nodes = list(session.graph_agent.graph.nodes())
+    if session.graph_agent.graph and not failed:
+        # The synthetic root would match nearly every answer ("the document says...").
+        all_nodes = [n for n in session.graph_agent.graph.nodes() if n != ROOT_NODE]
         
         def normalize_text(text):
             text = text.lower().replace("**", "").replace("*", "")
@@ -297,10 +317,11 @@ async def chat(request: ChatRequest, session: SessionData = Depends(get_current_
                 highlighted_nodes.append(node_id)
     
     return {
-        "response": response_text, 
-        "sources": context_docs, 
-        "highlighted_nodes": highlighted_nodes, 
-        "rate_limits": rate_limits
+        "response": response_text,
+        "sources": context_docs,
+        "highlighted_nodes": highlighted_nodes,
+        "engine": engine,
+        "error": failed,
     }
 
 if __name__ == "__main__":

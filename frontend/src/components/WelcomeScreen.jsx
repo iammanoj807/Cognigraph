@@ -1,14 +1,39 @@
 import React, { useRef, useState, useEffect } from 'react';
-import { Upload, FileText, ArrowRight, MessageSquare, Clock } from 'lucide-react';
-import axios from 'axios';
+import { Upload, FileText, Clock, Check, Loader2, AlertTriangle } from 'lucide-react';
+import { api } from '../lib/api';
+import Constellation from './Constellation';
+import EngineChain from './EngineChain';
 
-const WelcomeScreen = ({ onUploadSuccess, autoTrigger, onOpenChat }) => {
+const ACCEPTED = ['.pdf', '.txt', '.md'];
+
+const PIPELINE = [
+    'Reading the document',
+    'Indexing passages for retrieval',
+    'Extracting entities & relations',
+    'Weaving the graph',
+];
+
+// When each pipeline step starts (ms after upload begins); the last one holds until the server replies.
+const STEP_TIMINGS = [0, 1200, 2800, 5200];
+
+const formatCountdown = (seconds) => {
+    const h = Math.floor(seconds / 3600);
+    const m = Math.floor((seconds % 3600) / 60);
+    const s = seconds % 60;
+    return `${h > 0 ? `${h}h ` : ''}${m}m ${s}s`;
+};
+
+const WelcomeScreen = ({ onUploadSuccess, onUploadError, autoTrigger, chain }) => {
     const fileInputRef = useRef(null);
     const hasTriggeredRef = useRef(false); // Guard against StrictMode double-fire
     const [isUploading, setIsUploading] = useState(false);
+    const [isDragging, setIsDragging] = useState(false);
+    const [fileName, setFileName] = useState('');
+    const [step, setStep] = useState(0);
     const [error, setError] = useState(null);
+    const [retryIn, setRetryIn] = useState(0);
 
-    // Auto-click upload if triggered from "Upload New" button
+    // Auto-click upload if triggered from the "New document" button
     useEffect(() => {
         if (autoTrigger && fileInputRef.current && !hasTriggeredRef.current) {
             hasTriggeredRef.current = true;
@@ -16,14 +41,11 @@ const WelcomeScreen = ({ onUploadSuccess, autoTrigger, onOpenChat }) => {
         }
     }, [autoTrigger]);
 
-    const [retryIn, setRetryIn] = useState(0);
-
     // Auto-countdown for rate limit errors
     useEffect(() => {
         if (!retryIn) return;
-
         const timer = setInterval(() => {
-            setRetryIn(prev => {
+            setRetryIn((prev) => {
                 if (prev <= 1) {
                     setError(null); // Clear error when timer hits 0
                     return 0;
@@ -31,14 +53,26 @@ const WelcomeScreen = ({ onUploadSuccess, autoTrigger, onOpenChat }) => {
                 return prev - 1;
             });
         }, 1000);
-
         return () => clearInterval(timer);
     }, [retryIn]);
 
-    const handleFileChange = async (e) => {
-        const file = e.target.files[0];
-        if (!file) return;
+    // Walk through the pipeline labels while the server works
+    useEffect(() => {
+        if (!isUploading) return;
+        setStep(0);
+        const timers = STEP_TIMINGS.slice(1).map((ms, i) => setTimeout(() => setStep(i + 1), ms));
+        return () => timers.forEach(clearTimeout);
+    }, [isUploading]);
 
+    const uploadFile = async (file) => {
+        if (!file) return;
+        const extension = file.name.slice(file.name.lastIndexOf('.')).toLowerCase();
+        if (!ACCEPTED.includes(extension)) {
+            setError(`"${file.name}" isn't supported. Use a PDF, TXT or Markdown file.`);
+            return;
+        }
+
+        setFileName(file.name);
         setIsUploading(true);
         setError(null);
         setRetryIn(0);
@@ -47,125 +81,135 @@ const WelcomeScreen = ({ onUploadSuccess, autoTrigger, onOpenChat }) => {
         formData.append('file', file);
 
         try {
-            const API_URL = import.meta.env.VITE_API_URL || '';
-            const response = await axios.post(`${API_URL}/upload`, formData, {
-                headers: { 'Content-Type': 'multipart/form-data' }
+            const response = await api.post('/upload', formData, {
+                headers: { 'Content-Type': 'multipart/form-data' },
             });
-
+            if (!response.data?.nodes?.length) {
+                throw new Error('No concepts could be extracted from this document.');
+            }
             onUploadSuccess(response.data);
-
         } catch (err) {
-            console.error("Upload failed:", err);
-            const errorMsg = err.response?.data?.detail || "Failed to upload document. Please try again.";
+            console.error('Upload failed:', err);
+            const errorMsg = err.response?.data?.detail || err.message || 'Failed to upload document. Please try again.';
 
             // Check for wait time in error message
-            const match = errorMsg.match(/wait (\d+)s/);
+            const match = String(errorMsg).match(/wait (\d+)s/);
             if (match && match[1]) {
                 setRetryIn(parseInt(match[1], 10));
             }
-
-            setError(errorMsg);
+            setError(String(errorMsg));
+            onUploadError?.();
         } finally {
             setIsUploading(false);
             if (fileInputRef.current) fileInputRef.current.value = '';
         }
     };
 
+    const onDrop = (e) => {
+        e.preventDefault();
+        setIsDragging(false);
+        if (!isUploading) uploadFile(e.dataTransfer.files?.[0]);
+    };
+
     return (
-        <div className="relative flex flex-col items-center justify-between min-h-screen w-full bg-gradient-to-br from-gray-900 via-[#0f172a] to-gray-900 text-white p-6 overflow-y-auto">
-            <div className="flex-1 flex flex-col items-center justify-center w-full max-w-2xl text-center space-y-6 animate-fade-in-up py-6">
+        <div className="relative h-full w-full overflow-y-auto overflow-x-hidden bg-ink-950 dot-grid thin-scroll">
+            {/* Aurora glows */}
+            <div className="pointer-events-none absolute -left-40 -top-40 h-[520px] w-[520px] rounded-full bg-aurora-teal/10 blur-[120px]" />
+            <div className="pointer-events-none absolute -right-40 top-1/3 h-[560px] w-[560px] rounded-full bg-aurora-violet/10 blur-[140px]" />
+            <Constellation energized={isUploading} />
 
-                {/* Icon */}
-                <div className="flex justify-center">
-                    <div className="p-5 bg-blue-500/10 rounded-full border border-blue-500/20 shadow-[0_0_30px_rgba(59,130,246,0.2)]">
-                        <FileText size={48} className="text-blue-400" />
-                    </div>
-                </div>
-
-                {/* Title & Description */}
-                <div className="space-y-3">
-                    <h1 className="text-3xl md:text-5xl font-bold tracking-tight bg-gradient-to-r from-blue-400 to-purple-400 bg-clip-text text-transparent pb-1">
-                        Welcome to CogniGraph
+            <div className="relative z-10 mx-auto flex min-h-full max-w-5xl flex-col px-4 sm:px-8">
+                <main className="flex flex-1 flex-col items-center justify-center py-12 text-center">
+                    <img src="/graph-favicon.svg" alt="" className="h-14 w-14 animate-fade-up drop-shadow-[0_0_24px_rgba(167,139,250,0.55)] sm:h-16 sm:w-16" />
+                    <h1 className="mt-5 font-display text-[4.2rem] font-bold leading-none tracking-tighter text-white animate-fade-up [animation-delay:80ms] sm:text-8xl md:text-9xl">
+                        Cogni<span className="aurora-text">Graph</span>
                     </h1>
-                    <p className="text-sm md:text-xl text-gray-400 leading-relaxed max-w-lg mx-auto px-2">
-                        Transform your documents into interactive Knowledge Graphs.
-                        Upload a PDF or Text file to visualize concepts.
+                    <p className="mt-5 text-base text-slate-400 animate-fade-up [animation-delay:160ms] sm:text-lg">
+                        Turn any document into a 3D knowledge graph you can talk to.
                     </p>
-                </div>
 
-                {/* Upload Button Section */}
-                <div className="flex flex-col items-center gap-3 w-full px-4 mt-12">
-                    <button
-                        onClick={() => fileInputRef.current.click()}
-                        disabled={isUploading}
-                        className="group relative px-8 py-3 bg-blue-600 hover:bg-blue-500 text-white text-lg font-semibold rounded-xl shadow-lg hover:shadow-blue-500/30 transition-all duration-300 flex items-center gap-3 disabled:opacity-50 disabled:cursor-not-allowed"
+                    {/* Upload portal */}
+                    <div
+                        role="button"
+                        tabIndex={0}
+                        aria-label="Upload a document"
+                        data-active={isDragging || isUploading}
+                        onClick={() => !isUploading && fileInputRef.current?.click()}
+                        onKeyDown={(e) => (e.key === 'Enter' || e.key === ' ') && !isUploading && fileInputRef.current?.click()}
+                        onDragOver={(e) => {
+                            e.preventDefault();
+                            setIsDragging(true);
+                        }}
+                        onDragLeave={(e) => !e.currentTarget.contains(e.relatedTarget) && setIsDragging(false)}
+                        onDrop={onDrop}
+                        className={`portal glass mt-12 w-full max-w-xl rounded-[28px] px-6 py-8 text-left transition-transform duration-300 animate-fade-up [animation-delay:240ms] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-aurora-teal/60 sm:px-8 ${isUploading ? 'cursor-progress' : 'cursor-pointer hover:-translate-y-0.5'} ${isDragging ? 'scale-[1.02]' : ''}`}
                     >
                         {isUploading ? (
-                            <>
-                                <div className="w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
-                                <span>Processing...</span>
-                            </>
+                            <div>
+                                <div className="flex items-center gap-3">
+                                    <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-aurora-teal/10 text-aurora-teal">
+                                        <FileText size={20} />
+                                    </div>
+                                    <div className="min-w-0">
+                                        <p className="truncate text-sm font-semibold text-white">{fileName}</p>
+                                        <p className="text-xs text-slate-500">Building your knowledge graph…</p>
+                                    </div>
+                                </div>
+                                <ol className="mt-6 space-y-3">
+                                    {PIPELINE.map((label, i) => {
+                                        const done = i < step;
+                                        const active = i === step;
+                                        return (
+                                            <li key={label} className={`flex items-center gap-3 text-sm transition-colors duration-300 ${done ? 'text-slate-400' : active ? 'text-white' : 'text-slate-600'}`}>
+                                                <span className={`flex h-5 w-5 shrink-0 items-center justify-center rounded-full border ${done ? 'border-aurora-teal/40 bg-aurora-teal/15 text-aurora-teal' : active ? 'border-aurora-teal text-aurora-teal' : 'border-slate-700'}`}>
+                                                    {done ? <Check size={12} strokeWidth={3} /> : active ? <Loader2 size={12} className="animate-spin" /> : null}
+                                                </span>
+                                                {label}
+                                            </li>
+                                        );
+                                    })}
+                                </ol>
+                            </div>
                         ) : (
-                            <>
-                                <Upload size={24} />
-                                <span className="mr-1">Upload</span>
-                            </>
+                            <div className="flex items-center gap-5">
+                                <div className="relative flex h-16 w-16 shrink-0 items-center justify-center rounded-2xl bg-gradient-to-br from-aurora-teal/20 to-aurora-violet/20 text-white">
+                                    <Upload size={26} />
+                                    <span className="absolute left-1/2 top-1/2 -ml-1 -mt-1 h-2 w-2 rounded-full bg-aurora-teal shadow-[0_0_10px_#5eead4] animate-orbit [--orbit-r:38px]" />
+                                </div>
+                                <div className="min-w-0">
+                                    <p className="font-display text-xl font-semibold text-white">
+                                        {isDragging ? 'Release to map it' : 'Drop a document here'}
+                                    </p>
+                                    <p className="mt-1 text-sm text-slate-400">
+                                        or <span className="text-aurora-teal underline decoration-aurora-teal/40 underline-offset-4">browse your files</span>
+                                    </p>
+                                    <p className="mt-3 font-mono text-[11px] text-slate-500">PDF · TXT · MD</p>
+                                </div>
+                            </div>
                         )}
-                    </button>
+                    </div>
 
                     {error && (
-                        <div className="bg-red-500/10 border border-red-500/20 rounded-lg p-3 max-w-sm w-full flex items-center justify-center gap-2">
-                            {retryIn > 0 && <Clock size={15} className="text-red-400 shrink-0 animate-pulse" />}
-                            <p className="text-red-400 text-sm animate-pulse font-mono break-words text-center">
-                                {retryIn > 0
-                                    ? (() => {
-                                        const h = Math.floor(retryIn / 3600);
-                                        const m = Math.floor((retryIn % 3600) / 60);
-                                        const s = retryIn % 60;
-                                        return `API Rate Limit. Retry in: ${h > 0 ? `${h}h ` : ''}${m}m ${s}s`;
-                                    })()
-                                    : error}
+                        <div role="alert" className="mt-4 flex w-full max-w-xl items-start gap-2.5 rounded-2xl border border-red-400/20 bg-red-500/[0.07] px-4 py-3 text-left">
+                            {retryIn > 0 ? <Clock size={16} className="mt-0.5 shrink-0 text-orange-300" /> : <AlertTriangle size={16} className="mt-0.5 shrink-0 text-red-300" />}
+                            <p className="break-words text-sm text-red-200">
+                                {retryIn > 0 ? `Every AI provider is rate-limited. Retry in ${formatCountdown(retryIn)}.` : error}
                             </p>
                         </div>
                     )}
 
-                    <p className="text-xs text-gray-500">
-                        Supported formats: .pdf, .txt, .md
-                    </p>
-                </div>
+                    <input type="file" ref={fileInputRef} className="hidden" onChange={(e) => uploadFile(e.target.files[0])} accept={ACCEPTED.join(',')} />
 
-                <input
-                    type="file"
-                    ref={fileInputRef}
-                    className="hidden"
-                    onChange={handleFileChange}
-                    accept=".txt,.pdf,.md"
-                />
-            </div>
-
-            {/* Bottom Section: Open Chat + Footer */}
-            <div className="w-full flex flex-col items-center pb-6 mt-auto space-y-4">
-
-                {/* Mobile Open Chat Button */}
-                <div className="md:hidden w-full flex justify-center px-4">
-                    <button
-                        onClick={onOpenChat}
-                        className="text-blue-400 hover:text-blue-300 font-medium flex items-center gap-2 transition-colors duration-300"
-                    >
-                        <MessageSquare size={18} />
-                        <span>Open Chat</span>
-                    </button>
-                </div>
-
-                {/* Footer Text */}
-                <div className="flex flex-col items-center gap-1">
-                    <p className="text-[10px] text-gray-500 max-w-md text-center px-4 italic">
-                        Privacy Notice: No data is stored. All documents are processed in-memory.
-                    </p>
-                    <div className="text-gray-600 text-[10px] font-mono">
-                        © CogniGraph 2025
+                    {/* Engine chain */}
+                    <div className="mt-12 w-full max-w-md animate-fade-up [animation-delay:320ms]">
+                        <p className="eyebrow mb-4">AI fallback chain</p>
+                        <EngineChain chain={chain} busy={isUploading} />
                     </div>
-                </div>
+                </main>
+
+                <footer className="pb-6 pt-4 text-center font-mono text-[10px] text-slate-600">
+                    Processed in memory, never stored · © CogniGraph {new Date().getFullYear()}
+                </footer>
             </div>
         </div>
     );

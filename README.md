@@ -23,10 +23,11 @@ short_description: Transform documents into interactive Knowledge Graphs.
 ## 🚀 Features
 
 - **📄 Universal Document Support**: Handles **PDFs** (native text), **Scanned PDFs** (via OCR/Tesseract), **TXT**, and **Markdown** files.
-- **🕸️ Interactive Knowledge Graph**: Visualize complex relationships between people, organizations, and concepts using a force-directed graph.
-- **💬 Context-Aware Chat**: Chat with your document using **RAG (Retrieval-Augmented Generation)**. The AI answers strictly from the document's content.
+- **🕸️ Interactive 3D Knowledge Graph**: Fly through a glowing constellation of people, organizations, and concepts. Hubs are sized and colored by how connected they are.
+- **💬 Context-Aware Chat**: Chat with your document using **RAG (Retrieval-Augmented Generation)**. The AI answers strictly from the document's content, and the concepts each answer uses **light up in pink** on the graph.
+- **🔎 Explore by Hand**: Search any concept (press `/`), click a node to see its relationships, or ask about it in one click.
+- **🔁 Three-Provider AI Fallback**: Groq → Gemini → NVIDIA. If one provider is rate-limited or fails, the next one answers automatically, and the UI shows which provider handled each request.
 - **🔍 Smart OCR Fallback**: Automatically detects scanned/image-based PDFs and applies OCR to extract text.
-- **⚡ Rate Limit Handling**: Intelligent error handling that pauses and auto-retries when API limits are hit.
 - **📱 Responsive Design**: Fully optimized for Desktop and Mobile usage.
 
 ---
@@ -34,9 +35,9 @@ short_description: Transform documents into interactive Knowledge Graphs.
 ## 🛠️ Tech Stack
 
 ### Frontend
-- **React 18** (Vite)
+- **React 19** (Vite)
 - **Tailwind CSS** (Styling & Dark Mode)
-- **React-Force-Graph** (2D/3D Visualization)
+- **React-Force-Graph 3D** + **Three.js** (3D Visualization)
 - **Lucide React** (Icons)
 
 ### Backend
@@ -44,7 +45,7 @@ short_description: Transform documents into interactive Knowledge Graphs.
 - **NetworkX** (Graph Construction)
 - **ChromaDB** (Vector Database for RAG)
 - **Pytesseract** & **PDF2Image** (OCR Engine)
-- **Google Gemini API** (Gemini 2.5 Flash)
+- **Groq**, **Google Gemini** and **NVIDIA** APIs (OpenAI-compatible, with automatic fallback)
 
 ---
 
@@ -75,11 +76,15 @@ Before running the project, ensure you have the following installed:
     cd backend
     cp .env.example .env
     ```
-    Open `.env` and add your **Google Gemini API Key**:
+    Open `.env` and add your API keys (any provider without a key is skipped):
     ```ini
-    GEMINI_API_KEY=your_key_here
+    GROQ_API_KEY=your_groq_key
+    GEMINI_API_KEY=your_gemini_key
+    NVIDIA_API_KEY=your_nvidia_key
     ```
-    > 🔑 *Get a free key from [Google AI Studio](https://aistudio.google.com/app/apikey).*
+    > 🔑 *Free keys: [Groq Console](https://console.groq.com/keys) · [Google AI Studio](https://aistudio.google.com/app/apikey) · [NVIDIA Build](https://build.nvidia.com/).*
+
+    > ☁️ *On Hugging Face Spaces, add the same three names under **Settings → Variables and secrets** as secrets. Never commit them.*
 
 ---
 
@@ -108,8 +113,8 @@ This will automatically:
 ## ⚠️ Troubleshooting
 
 **1. "401 Unauthorized" Error**
-*   Your API Key is invalid or expired.
-*   Get a new key from [Google AI Studio](https://aistudio.google.com/app/apikey) and update `backend/.env`.
+*   One of your API keys is invalid or expired. The app falls back to the next provider automatically, and the chat shows "key rejected" next to the failing one.
+*   Replace that key in `backend/.env` (or your Space secrets) and restart the backend.
 
 **2. "Poppler/Tesseract not installed"**
 *   The app cannot read scanned PDFs without these tools.
@@ -123,7 +128,17 @@ This will automatically:
 
 ## ⚡ AI Engine
 
-This project is powered by **Google Gemini 2.5 Flash**, offering fast inference, high throughput, and generous token limits.
+Every LLM request (graph extraction and chat) walks an ordered fallback chain:
+
+| Order | Provider | Model | Used when |
+|---|---|---|---|
+| 1 | **Groq** | `openai/gpt-oss-120b` | Always tried first; answers most questions |
+| 2 | **Google Gemini** | `gemini-3.5-flash-lite` | Only when Groq is rate-limited or errors |
+| 3 | **NVIDIA** | `openai/gpt-oss-20b` | Only when both Groq and Gemini fail |
+
+A provider that returns a rate limit (HTTP 429) is skipped until its `Retry-After` passes, so it doesn't slow down later requests. A response that comes back empty or can't be parsed into a graph also falls through to the next provider. The models can be overridden with `GROQ_MODEL`, `GEMINI_MODEL` and `NVIDIA_MODEL`.
+
+> ℹ️ Groq's free tier caps prompts at ~8K tokens per minute, so documents longer than roughly 25K characters are usually graphed by Gemini, while chat stays on Groq.
 The application uses **Retrieval-Augmented Generation (RAG)** to fetch only relevant document chunks to combine with graph relationships for grounded answers.
 
 ---
