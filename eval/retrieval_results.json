@@ -1,0 +1,107 @@
+{
+  "shipped": {
+    "n": 20,
+    "hit@1": 18,
+    "hit@3": 20,
+    "hit@1_pct": 90.0,
+    "hit@3_pct": 100.0,
+    "mrr": 0.933
+  },
+  "misses": [],
+  "sweep": [
+    {
+      "n": 20,
+      "hit@1": 9,
+      "hit@3": 17,
+      "hit@1_pct": 45.0,
+      "hit@3_pct": 85.0,
+      "mrr": 0.625,
+      "chunk_size": 300,
+      "overlap": 60,
+      "n_chunks": 36
+    },
+    {
+      "n": 20,
+      "hit@1": 15,
+      "hit@3": 20,
+      "hit@1_pct": 75.0,
+      "hit@3_pct": 100.0,
+      "mrr": 0.85,
+      "chunk_size": 500,
+      "overlap": 100,
+      "n_chunks": 22
+    },
+    {
+      "n": 20,
+      "hit@1": 18,
+      "hit@3": 20,
+      "hit@1_pct": 90.0,
+      "hit@3_pct": 100.0,
+      "mrr": 0.933,
+      "chunk_size": 1000,
+      "overlap": 200,
+      "n_chunks": 12
+    },
+    {
+      "n": 20,
+      "hit@1": 18,
+      "hit@3": 20,
+      "hit@1_pct": 90.0,
+      "hit@3_pct": 100.0,
+      "mrr": 0.95,
+      "chunk_size": 1500,
+      "overlap": 300,
+      "n_chunks": 10
+    },
+    {
+      "n": 20,
+      "hit@1": 19,
+      "hit@3": 20,
+      "hit@1_pct": 95.0,
+      "hit@3_pct": 100.0,
+      "mrr": 0.975,
+      "chunk_size": 2000,
+      "overlap": 400,
+      "n_chunks": 6
+    }
+  ],
+  "truncation_probe": [
+    {
+      "prefix_chars": 600,
+      "cosine_with_appended_text": 0.86879,
+      "truncated": false
+    },
+    {
+      "prefix_chars": 800,
+      "cosine_with_appended_text": 0.92548,
+      "truncated": false
+    },
+    {
+      "prefix_chars": 1000,
+      "cosine_with_appended_text": 0.97155,
+      "truncated": false
+    },
+    {
+      "prefix_chars": 1200,
+      "cosine_with_appended_text": 0.98241,
+      "truncated": false
+    },
+    {
+      "prefix_chars": 1400,
+      "cosine_with_appended_text": 1.0,
+      "truncated": true
+    },
+    {
+      "prefix_chars": 1600,
+      "cosine_with_appended_text": 1.0,
+      "truncated": true
+    },
+    {
+      "prefix_chars": 2000,
+      "cosine_with_appended_text": 1.0,
+      "truncated": true
+    }
+  ],
+  "top_k": 3,
+  "embedder": "all-MiniLM-L6-v2 (Chroma default)"
+}

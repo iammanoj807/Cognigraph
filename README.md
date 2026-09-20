@@ -158,6 +158,67 @@ The application uses **Retrieval-Augmented Generation (RAG)** to fetch only rele
 
 ---
 
+## 📊 Retrieval quality — measured
+
+Search quality is measured, not assumed. `eval/` holds a fixed 6-document
+corpus and 20 labelled questions, each tagged with the exact passage that
+answers it. Runs offline in seconds — no API key, no network, no cost.
+
+```bash
+python eval/measure_retrieval.py
+```
+
+The six documents **overlap in vocabulary on purpose** — three on model
+inference, three on vector search, each naming the others. A question about
+ONNX cannot be answered by keyword-matching "ONNX", because two other documents
+mention it. Without that overlap the test would measure nothing: any retriever
+separates six unrelated documents.
+
+### Results (chunk size 1000, overlap 200 — the shipped setting)
+
+| Metric | Result |
+|---|---|
+| hit@1 — answering passage ranked first | **18/20 (90%)** |
+| hit@3 — in the top 3, the app's default `n_results` | **20/20 (100%)** |
+| MRR | **0.933** |
+
+Both questions that missed the top slot were found at rank 3, so every question
+was answerable from what the app actually shows the model.
+
+### Why the chunk size is 1000
+
+| Chunk size | hit@1 | hit@3 | MRR |
+|---|---|---|---|
+| 300 | 45.0% | 85.0% | 0.625 |
+| 500 | 75.0% | 100% | 0.850 |
+| **1000** | **90.0%** | **100%** | **0.933** |
+| 1500 | 90.0% | 100% | 0.950 |
+| 2000 | 95.0% | 100% | 0.975 |
+
+Read naively this says "use 2000". It does not, and the eval demonstrates why.
+
+`all-MiniLM-L6-v2` has a fixed input window. Appending unrelated text to a
+chunk and getting **cosine 1.000000** back proves the tail never reached the
+model — and that happens from about **1400 characters** onward. At 1500 and
+2000 the text is being silently discarded; no error is raised.
+
+So why do they score better? Because this corpus is small. At 2000 chars there
+are only 6 chunks for 6 documents, and the task collapses into "pick one of
+six" — easier for a reason that would not survive a real corpus. **1000 is the
+right setting: the largest that still fits inside the embedding window.**
+
+### Honest limits
+
+- **20 questions over 6 documents.** Small, and hand-written by the repo author,
+  so it can flatter itself. Every label is machine-checked before scoring to
+  appear in exactly one document, but that catches ambiguity, not bias.
+- **The chunk sweep is corpus-size confounded**, as above. It shows where the
+  setting breaks down, not an optimum to copy.
+- **hit@3 100% is a ceiling effect** at this corpus size. Expect it to fall on a
+  larger collection.
+- Measures retrieval only. Whether the LLM then uses the retrieved passage
+  correctly is a separate question this does not test.
+
 ## 🤝 Contributing
 
 Contributions are welcome! Please fork the repository and submit a Pull Request.
