@@ -253,8 +253,9 @@ right setting: the largest that still fits inside the embedding window.**
   that bias looks like when measured.
 - **The chunk sweep is corpus-size confounded**, as above. It shows where the
   setting breaks down, not an optimum to copy.
-- **hit@3 100% is a ceiling effect** at this corpus size. Expect it to fall on a
-  larger collection.
+- **hit@3 is near its ceiling** at this corpus size: returning 3 of 12 chunks
+  covers a quarter of the collection, so 95-100% is easier than it sounds.
+  Expect it to fall on a larger collection.
 - Measures retrieval only. Whether the LLM then uses the retrieved passage
   correctly is a separate question this does not test.
 
