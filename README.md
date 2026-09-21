@@ -201,8 +201,8 @@ would address.
 
 | Ranker | original hit@1 | paraphrased hit@1 | paraphrased hit@3 |
 |---|---|---|---|
-| Keyword (TF-IDF, no ML) | 85.0% | 50.0% | 75.0% |
-| ChromaDB embeddings | 90.0% | 50.0% | 90.0% |
+| Keyword (TF-IDF, no ML) | 85.0% | 55.0% | 80.0% |
+| ChromaDB embeddings | 90.0% | 55.0% | 95.0% |
 
 On hit@1 the embedding model does not beat keyword matching at all. Its
 advantage shows only at hit@3, where it recovers 3 more questions out of 20.
@@ -243,7 +243,7 @@ right setting: the largest that still fits inside the embedding window.**
   only at hit@3. That is a real result, not a strong one.
 - **20 questions over 6 documents**, all written by the repo author. Every
   label is machine-checked to appear in exactly one document, but that catches
-  ambiguity, not bias — the 40-point drop between the two question sets is what
+  ambiguity, not bias — the 35-point drop between the two question sets is what
   that bias looks like when measured.
 - **The chunk sweep is corpus-size confounded**, as above. It shows where the
   setting breaks down, not an optimum to copy.
