@@ -232,7 +232,11 @@ PARAPHRASED = [
   "built for an A100 will not load"),
  ("Which step times several implementations and keeps whichever is fastest?",
   "Kernel auto-tuning"),
- ("When the two are combined, how is the work split between them?",
+ # Naming both products is fine -- a real user would. What the paraphrase must
+ # avoid is the ANSWER's wording ("partitions the graph"), not the subject.
+ # The earlier version, "When the two are combined...", had no antecedent and
+ # was unanswerable standalone, so no retriever could have found it.
+ ("If TensorRT runs inside ONNX Runtime, how is the model divided between them?",
   "partitions the graph"),
  ("Which precision-reduction approach needs no sample inputs at all?",
   "needs no calibration data"),

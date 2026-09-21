@@ -180,19 +180,22 @@ Two question sets over the same passages. The first was written alongside the
 corpus; the second asks the same things in a user's words, avoiding each
 answer's distinctive vocabulary.
 
-| Question style | hit@1 | hit@3 |
-|---|---|---|
-| Written alongside the corpus | 90.0% | 100% |
-| **Paraphrased — user wording** | **50.0%** | **90.0%** |
+| Question style | chunk hit@1 | chunk hit@3 | doc hit@1 |
+|---|---|---|---|
+| Written alongside the corpus | 90.0% | 100% | 100% |
+| **Paraphrased — user wording** | **55.0%** | **95.0%** | **70.0%** |
 
-**Rewording the questions costs 40 points of hit@1.** The first row measures
-how the questions were written, not how well retrieval works. The second is
-what a real user experiences.
+**Rewording the questions costs 35 points of chunk hit@1.** The first row
+measures how the questions were written, not how well retrieval works. The
+second is what a real user experiences.
 
-`hit@3 = 90%` is the number that describes the app, because `query()` returns
-three passages and all three go to the model. `hit@1 = 50%` says the ranking
-inside those three is often wrong — worth knowing before trusting the top hit
-alone.
+`chunk hit@3 = 95%` is the number that describes the app, because `query()`
+returns three passages and all three go to the model.
+
+`doc hit@1 = 70%` against `chunk hit@1 = 55%` says much of the ranking failure
+is the right document but the wrong chunk inside it — a milder failure than
+retrieving something unrelated, and one that a smaller chunk size or a reranker
+would address.
 
 ### Control: the same questions with no embeddings
 
@@ -231,7 +234,11 @@ right setting: the largest that still fits inside the embedding window.**
 ### Honest limits
 
 - **Quote the paraphrased row, not the original one.** 90% hit@1 measures the
-  question wording. 50% hit@1 / 90% hit@3 is the honest figure.
+  question wording. 55% chunk hit@1 / 95% chunk hit@3 is the honest figure.
+- **One paraphrased question had to be rewritten after inspection.** "When the
+  two are combined..." had no antecedent and was unanswerable standalone, so no
+  retriever could have found it. Reading all 20 results individually is what
+  caught it; the aggregate score did not.
 - **On hit@1 the embedding model ties keyword matching.** It earns its place
   only at hit@3. That is a real result, not a strong one.
 - **20 questions over 6 documents**, all written by the repo author. Every

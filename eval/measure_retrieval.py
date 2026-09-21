@@ -67,19 +67,39 @@ def build(size, overlap, name):
     return col, len(docs)
 
 
-def evaluate_set(col, qs, k=TOP_K):
-    """Same scoring, for a (question, snippet) list."""
-    hit1 = hitk = 0
+def evaluate_set(col, qs, chunk_owner, k=TOP_K):
+    """Score a (question, snippet) list at chunk level AND document level.
+
+    Chunk level is what the app depends on: if the wrong chunk is retrieved, the
+    answering text is not in the model's context, however close it was. But
+    "right document, wrong chunk" is a much milder failure than "wrong document
+    entirely", and the two are indistinguishable in a single number, so both are
+    reported.
+    """
+    hit1 = hitk = doc1 = 0
     for q, snip in qs:
+        true_doc = next(k_ for k_, v in DOCUMENTS.items() if norm(snip) in norm(v))
         res = col.query(query_texts=[q], n_results=k)
         got = [norm(d) for d in res["documents"][0]]
         ranks = [i for i, d in enumerate(got) if norm(snip) in d]
         if ranks:
             hitk += 1
             hit1 += (ranks[0] == 0)
+        if got and chunk_owner.get(got[0]) == true_doc:
+            doc1 += 1
     n = len(qs)
-    return {"n": n, "hit@1": hit1, "hit@3": hitk,
-            "hit@1_pct": round(100 * hit1 / n, 1), "hit@3_pct": round(100 * hitk / n, 1)}
+    return {"n": n, "hit@1": hit1, "hit@3": hitk, "doc_hit@1": doc1,
+            "hit@1_pct": round(100 * hit1 / n, 1), "hit@3_pct": round(100 * hitk / n, 1),
+            "doc_hit@1_pct": round(100 * doc1 / n, 1)}
+
+
+def chunk_owner_map(size=1000, overlap=200):
+    """Which document each chunk came from, for the document-level metric."""
+    owner = {}
+    for doc_id, text in DOCUMENTS.items():
+        for c in chunk(text, size, overlap):
+            owner[norm(c)] = doc_id
+    return owner
 
 
 def evaluate(col, k=TOP_K, verbose=False):
@@ -223,15 +243,17 @@ def main():
     print("  about the corpus being easy than about retrieval being good.")
 
     print("\n=== the same passages, asked in a user's words ===")
-    para = evaluate_set(col, PARAPHRASED)
-    print(f"  original questions (written alongside the corpus): "
-          f"hit@1 {base['hit@1_pct']:5.1f}%   hit@3 {base['hit@3_pct']:5.1f}%")
-    print(f"  paraphrased questions (answer's wording avoided) : "
-          f"hit@1 {para['hit@1_pct']:5.1f}%   hit@3 {para['hit@3_pct']:5.1f}%")
-    print(f"\n  Rewording the questions costs "
-          f"{base['hit@1_pct'] - para['hit@1_pct']:.0f} points of hit@1.")
-    print("  The first row measures the questions, not the retrieval. The second")
-    print("  is the number that describes what a real user would experience.")
+    owner = chunk_owner_map()
+    orig = evaluate_set(col, [(q, s_) for q, s_, _ in QUESTIONS], owner)
+    para = evaluate_set(col, PARAPHRASED, owner)
+    print(f"  {'question style':<34s} {'chunk hit@1':>12s} {'chunk hit@3':>12s} {'doc hit@1':>10s}")
+    for label, r in (("written alongside the corpus", orig), ("paraphrased, user wording", para)):
+        print(f"  {label:<34s} {r['hit@1_pct']:>11.1f}% {r['hit@3_pct']:>11.1f}% "
+              f"{r['doc_hit@1_pct']:>9.1f}%")
+    print(f"\n  Rewording costs {orig['hit@1_pct'] - para['hit@1_pct']:.0f} points of chunk hit@1.")
+    print("  The first row measures how the questions were written. The second is")
+    print("  what a real user experiences. Document hit@1 shows that much of the")
+    print("  gap is the right document but the wrong chunk inside it.")
 
     print("\n=== embedder input window ===")
     print("  appending unrelated text to a prefix; cosine 1.0 means it was discarded")
@@ -249,7 +271,7 @@ def main():
 
     out = {"shipped": {k: v for k, v in base.items() if k != "misses"},
            "misses": [{"question": q, "wanted": s, "why_hard": w} for q, s, w, _ in base["misses"]],
-           "paraphrased": para, "lexical_baseline": lex, "sweep": sweep,
+           "original_questions": orig, "paraphrased": para, "lexical_baseline": lex, "sweep": sweep,
            "truncation_probe": trunc,
            "top_k": TOP_K,
            "embedder": "all-MiniLM-L6-v2 (Chroma default)"}
