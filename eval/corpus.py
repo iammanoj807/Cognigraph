@@ -209,3 +209,57 @@ QUESTIONS = [
  ("Why does using a symmetric model for RAG cost recall?",
   "expect a short query against a long passage", "subtle distinction in one doc"),
 ]
+
+
+# A second question set over the SAME passages, phrased the way someone who has
+# not read them would ask. The original questions reuse each passage's own
+# vocabulary, which a keyword ranker exploits -- that is why it scored 80%
+# against the embedding model's 90%, leaving the headline number unable to show
+# that semantic retrieval was doing anything.
+#
+# These deliberately avoid the answer's distinctive words: "reordering" not
+# "transpose", "graphics card" not "GPU", "sample inputs" not "calibration".
+# If the embedding model holds up here while the keyword baseline collapses,
+# the gap is real retrieval quality rather than shared wording.
+PARAPHRASED = [
+ ("If two data reordering steps undo one another, what does the optimiser do with them?",
+  "redundant transpose elimination"),
+ ("How might work quietly end up running on different hardware than I expected?",
+  "fallback is silent"),
+ ("What lets a model run inside a web page with nothing sent to a server?",
+  "WebAssembly and WebGPU"),
+ ("Why can a compiled file from one graphics card not be reused on a different one?",
+  "built for an A100 will not load"),
+ ("Which step times several implementations and keeps whichever is fastest?",
+  "Kernel auto-tuning"),
+ ("When the two are combined, how is the work split between them?",
+  "partitions the graph"),
+ ("Which precision-reduction approach needs no sample inputs at all?",
+  "needs no calibration data"),
+ ("Which approach preserves accuracy best but requires another training run?",
+  "simulates the rounding error"),
+ ("By how much does moving to 8-bit storage shrink a 32-bit model?",
+  "quarter the size"),
+ ("Why can a small drop on a general test still mean trouble for my own use case?",
+  "lose ten percent on one narrow domain"),
+ ("Which operation type breaks at execution time after precision is reduced?",
+  "ConvInteger"),
+ ("If I add text without supplying my own vectors, what does the store do?",
+  "embeds them using its default model"),
+ ("Why is a second lookup unnecessary with this store?",
+  "holds documents alongside vectors"),
+ ("At roughly what collection size should I move to a server-based option?",
+  "tens or hundreds of thousands"),
+ ("Which structure checks every stored item and therefore slows down as it grows?",
+  "flat index compares a query against every"),
+ ("Which structure gives the best speed-versus-accuracy compromise at middling scale?",
+  "HNSW builds a navigable"),
+ ("How can I search more items than will fit in memory?",
+  "Product quantisation compresses"),
+ ("What has the bigger effect on results: how text becomes vectors, or the lookup structure?",
+  "depends far more on this choice"),
+ ("What happens to the surplus text when a passage exceeds the model's limit?",
+  "silently discarding anything beyond"),
+ ("Why does choosing the wrong training style of model reduce recall here?",
+  "expect a short query against a long passage"),
+]

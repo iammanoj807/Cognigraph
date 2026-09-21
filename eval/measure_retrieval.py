@@ -23,7 +23,7 @@ sys.path.insert(0, str(ROOT / "backend"))
 sys.path.insert(0, str(ROOT / "eval"))
 
 import chromadb                                    # noqa: E402
-from corpus import DOCUMENTS, QUESTIONS            # noqa: E402
+from corpus import DOCUMENTS, PARAPHRASED, QUESTIONS   # noqa: E402
 
 TOP_K = 3
 
@@ -65,6 +65,21 @@ def build(size, overlap, name):
             ids.append(f"{doc_id}_{i}")
     col.add(documents=docs, ids=ids)
     return col, len(docs)
+
+
+def evaluate_set(col, qs, k=TOP_K):
+    """Same scoring, for a (question, snippet) list."""
+    hit1 = hitk = 0
+    for q, snip in qs:
+        res = col.query(query_texts=[q], n_results=k)
+        got = [norm(d) for d in res["documents"][0]]
+        ranks = [i for i, d in enumerate(got) if norm(snip) in d]
+        if ranks:
+            hitk += 1
+            hit1 += (ranks[0] == 0)
+    n = len(qs)
+    return {"n": n, "hit@1": hit1, "hit@3": hitk,
+            "hit@1_pct": round(100 * hit1 / n, 1), "hit@3_pct": round(100 * hitk / n, 1)}
 
 
 def evaluate(col, k=TOP_K, verbose=False):
@@ -207,6 +222,17 @@ def main():
     print("  At this sample size that is noise. The hit rates therefore say more")
     print("  about the corpus being easy than about retrieval being good.")
 
+    print("\n=== the same passages, asked in a user's words ===")
+    para = evaluate_set(col, PARAPHRASED)
+    print(f"  original questions (written alongside the corpus): "
+          f"hit@1 {base['hit@1_pct']:5.1f}%   hit@3 {base['hit@3_pct']:5.1f}%")
+    print(f"  paraphrased questions (answer's wording avoided) : "
+          f"hit@1 {para['hit@1_pct']:5.1f}%   hit@3 {para['hit@3_pct']:5.1f}%")
+    print(f"\n  Rewording the questions costs "
+          f"{base['hit@1_pct'] - para['hit@1_pct']:.0f} points of hit@1.")
+    print("  The first row measures the questions, not the retrieval. The second")
+    print("  is the number that describes what a real user would experience.")
+
     print("\n=== embedder input window ===")
     print("  appending unrelated text to a prefix; cosine 1.0 means it was discarded")
     trunc = truncation_probe()
@@ -223,7 +249,8 @@ def main():
 
     out = {"shipped": {k: v for k, v in base.items() if k != "misses"},
            "misses": [{"question": q, "wanted": s, "why_hard": w} for q, s, w, _ in base["misses"]],
-           "lexical_baseline": lex, "sweep": sweep, "truncation_probe": trunc,
+           "paraphrased": para, "lexical_baseline": lex, "sweep": sweep,
+           "truncation_probe": trunc,
            "top_k": TOP_K,
            "embedder": "all-MiniLM-L6-v2 (Chroma default)"}
     p = ROOT / "eval" / "retrieval_results.json"

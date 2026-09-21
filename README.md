@@ -174,38 +174,37 @@ ONNX cannot be answered by keyword-matching "ONNX", because two other documents
 mention it. Without that overlap the test would measure nothing: any retriever
 separates six unrelated documents.
 
-### Results (chunk size 1000, overlap 200 — the shipped setting)
+### Results
 
-| Metric | Result |
-|---|---|
-| hit@1 — answering passage ranked first | **18/20 (90%)** |
-| hit@3 — in the top 3, the app's default `n_results` | **20/20 (100%)** |
-| MRR | **0.933** |
+Two question sets over the same passages. The first was written alongside the
+corpus; the second asks the same things in a user's words, avoiding each
+answer's distinctive vocabulary.
 
-Both questions that missed the top slot were found at rank 3, so every question
-was answerable from what the app actually shows the model.
+| Question style | hit@1 | hit@3 |
+|---|---|---|
+| Written alongside the corpus | 90.0% | 100% |
+| **Paraphrased — user wording** | **50.0%** | **90.0%** |
 
-**Read those numbers with the control below, not on their own.**
+**Rewording the questions costs 40 points of hit@1.** The first row measures
+how the questions were written, not how well retrieval works. The second is
+what a real user experiences.
+
+`hit@3 = 90%` is the number that describes the app, because `query()` returns
+three passages and all three go to the model. `hit@1 = 50%` says the ranking
+inside those three is often wrong — worth knowing before trusting the top hit
+alone.
 
 ### Control: the same questions with no embeddings
 
-| Ranker | hit@1 | hit@3 |
-|---|---|---|
-| Random guess | 8.3% | — |
-| TF-IDF word overlap, no ML | 80.0% | 95.0% |
-| ChromaDB embeddings | 90.0% | 100% |
+| Ranker | original hit@1 | paraphrased hit@1 | paraphrased hit@3 |
+|---|---|---|---|
+| Keyword (TF-IDF, no ML) | 85.0% | 50.0% | 75.0% |
+| ChromaDB embeddings | 90.0% | 50.0% | 90.0% |
 
-A keyword ranker with no embeddings at all gets within **2 questions out of
-20**. At this sample size that is noise.
-
-The reason is that the corpus and the questions were written by the same
-person, so the questions reuse vocabulary from their answer passages — which is
-precisely what a keyword ranker exploits. Real user questions do not do that.
-
-So the 90% figure mostly measures how easy this corpus is, not how good the
-retrieval is. **The defensible result from this eval is the embedding-window
-finding below, not the hit rate.** Any future change to the retrieval should be
-judged against this baseline, not against 90%.
+On hit@1 the embedding model does not beat keyword matching at all. Its
+advantage shows only at hit@3, where it recovers 3 more questions out of 20.
+Any future retrieval change should be measured against this baseline, not
+against a bare accuracy figure.
 
 ### Why the chunk size is 1000
 
@@ -231,13 +230,14 @@ right setting: the largest that still fits inside the embedding window.**
 
 ### Honest limits
 
-- **The hit rates barely beat keyword matching** (90% against 80%), so they do
-  not demonstrate that the embedding model is earning its place. Fixing this
-  needs questions phrased in vocabulary the passages do not use — ideally
-  written by someone who did not write the corpus.
-- **20 questions over 6 documents.** Small, and hand-written by the repo author,
-  so it can flatter itself. Every label is machine-checked before scoring to
-  appear in exactly one document, but that catches ambiguity, not bias.
+- **Quote the paraphrased row, not the original one.** 90% hit@1 measures the
+  question wording. 50% hit@1 / 90% hit@3 is the honest figure.
+- **On hit@1 the embedding model ties keyword matching.** It earns its place
+  only at hit@3. That is a real result, not a strong one.
+- **20 questions over 6 documents**, all written by the repo author. Every
+  label is machine-checked to appear in exactly one document, but that catches
+  ambiguity, not bias — the 40-point drop between the two question sets is what
+  that bias looks like when measured.
 - **The chunk sweep is corpus-size confounded**, as above. It shows where the
   setting breaks down, not an optimum to copy.
 - **hit@3 100% is a ceiling effect** at this corpus size. Expect it to fall on a

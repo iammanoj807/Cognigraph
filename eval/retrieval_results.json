@@ -8,6 +8,13 @@
     "mrr": 0.933
   },
   "misses": [],
+  "paraphrased": {
+    "n": 20,
+    "hit@1": 10,
+    "hit@3": 18,
+    "hit@1_pct": 50.0,
+    "hit@3_pct": 90.0
+  },
   "lexical_baseline": {
     "hit@1": 16,
     "hit@3": 19,
