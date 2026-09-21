@@ -26,12 +26,21 @@
     "hit@3_pct": 95.0,
     "doc_hit@1_pct": 70.0
   },
-  "lexical_baseline": {
+  "lexical_baseline_original": {
     "hit@1": 16,
     "hit@3": 19,
     "n": 20,
     "hit@1_pct": 80.0,
     "hit@3_pct": 95.0,
+    "random_hit@1_pct": 8.3,
+    "n_chunks": 12
+  },
+  "lexical_baseline_paraphrased": {
+    "hit@1": 10,
+    "hit@3": 16,
+    "n": 20,
+    "hit@1_pct": 50.0,
+    "hit@3_pct": 80.0,
     "random_hit@1_pct": 8.3,
     "n_chunks": 12
   },

@@ -201,13 +201,18 @@ would address.
 
 | Ranker | original hit@1 | paraphrased hit@1 | paraphrased hit@3 |
 |---|---|---|---|
-| Keyword (TF-IDF, no ML) | 85.0% | 55.0% | 80.0% |
+| Random guess | 8.3% | 8.3% | — |
+| Keyword (TF-IDF, no ML) | 80.0% | 50.0% | 80.0% |
 | ChromaDB embeddings | 90.0% | 55.0% | 95.0% |
 
-On hit@1 the embedding model does not beat keyword matching at all. Its
-advantage shows only at hit@3, where it recovers 3 more questions out of 20.
-Any future retrieval change should be measured against this baseline, not
-against a bare accuracy figure.
+On user-worded questions the embedding model beats keyword matching by **1
+question at hit@1 and 3 at hit@3**, out of 20. At this sample size the hit@1
+difference is noise; only the hit@3 gap is worth anything.
+
+That is a modest result, and it is the point of running the control: a bare
+"95% hit@3" would have implied the embedding model was doing far more work
+than it is. Any future retrieval change should be measured against this
+baseline, not against a bare accuracy figure.
 
 ### Why the chunk size is 1000
 
@@ -239,8 +244,9 @@ right setting: the largest that still fits inside the embedding window.**
   two are combined..." had no antecedent and was unanswerable standalone, so no
   retriever could have found it. Reading all 20 results individually is what
   caught it; the aggregate score did not.
-- **On hit@1 the embedding model ties keyword matching.** It earns its place
-  only at hit@3. That is a real result, not a strong one.
+- **The embedding model beats keyword matching by 1 question at hit@1.** It
+  earns its place at hit@3, by 3 questions. That is a real result, not a
+  strong one.
 - **20 questions over 6 documents**, all written by the repo author. Every
   label is machine-checked to appear in exactly one document, but that catches
   ambiguity, not bias — the 35-point drop between the two question sets is what
