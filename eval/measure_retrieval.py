@@ -91,6 +91,51 @@ def evaluate(col, k=TOP_K, verbose=False):
             "mrr": round(rr_total / n, 3), "misses": misses}
 
 
+def lexical_baseline():
+    """Score the same questions with no embeddings at all.
+
+    This is the control the hit rates need. If a TF-IDF word-overlap ranker
+    does about as well as the embedding model, then the eval is not measuring
+    retrieval quality -- it is measuring how much vocabulary the questions
+    happen to share with their answer passages. Since the corpus and the
+    questions were written by the same person, that overlap is exactly the bias
+    to expect, so the baseline must always be reported next to the headline.
+    """
+    import math
+    from collections import Counter
+
+    STOP = set("the a an is are was were of to in for and or that this it with "
+               "as on by be can not you your from at which does do how what why "
+               "when".split())
+    def toks(t):
+        return [w for w in re.findall(r"[a-z0-9-]+", t.lower())
+                if w not in STOP and len(w) > 2]
+
+    chunks = []
+    for text in DOCUMENTS.values():
+        chunks += [norm(c) for c in chunk(text, 1000, 200)]
+    df = Counter()
+    for c in chunks:
+        df.update(set(toks(c)))
+    n_chunks = len(chunks)
+
+    def score(q, c):
+        qt, ct = Counter(toks(q)), Counter(toks(c))
+        return sum(ct[w] * math.log(n_chunks / (1 + df[w])) for w in qt if w in ct)
+
+    hit1 = hit3 = 0
+    for q, snip, _ in QUESTIONS:
+        ranked = sorted(range(n_chunks), key=lambda i: -score(q, chunks[i]))[:TOP_K]
+        pos = [r for r, i in enumerate(ranked) if norm(snip) in chunks[i]]
+        if pos:
+            hit3 += 1
+            hit1 += (pos[0] == 0)
+    n = len(QUESTIONS)
+    return {"hit@1": hit1, "hit@3": hit3, "n": n,
+            "hit@1_pct": round(100 * hit1 / n, 1), "hit@3_pct": round(100 * hit3 / n, 1),
+            "random_hit@1_pct": round(100 / n_chunks, 1), "n_chunks": n_chunks}
+
+
 def truncation_probe():
     """Find where the embedder silently stops reading.
 
@@ -149,6 +194,19 @@ def main():
         print(f"  {size:>6d} {ov:>8d} {nc:>7d} {r['hit@1_pct']:>6.1f}% "
               f"{r['hit@3_pct']:>6.1f}% {r['mrr']:>6.3f}{star}")
 
+    print("\n=== control: no embeddings at all ===")
+    lex = lexical_baseline()
+    print(f"  random guess          hit@1 {lex['random_hit@1_pct']:>5.1f}%")
+    print(f"  TF-IDF word overlap   hit@1 {lex['hit@1_pct']:>5.1f}%   "
+          f"hit@3 {lex['hit@3_pct']:>5.1f}%")
+    print(f"  ChromaDB embeddings   hit@1 {base['hit@1_pct']:>5.1f}%   "
+          f"hit@3 {base['hit@3_pct']:>5.1f}%")
+    gap = base["hit@1"] - lex["hit@1"]
+    print(f"\n  The embedding model beats keyword matching by {gap} question(s) of "
+          f"{lex['n']}.")
+    print("  At this sample size that is noise. The hit rates therefore say more")
+    print("  about the corpus being easy than about retrieval being good.")
+
     print("\n=== embedder input window ===")
     print("  appending unrelated text to a prefix; cosine 1.0 means it was discarded")
     trunc = truncation_probe()
@@ -165,7 +223,8 @@ def main():
 
     out = {"shipped": {k: v for k, v in base.items() if k != "misses"},
            "misses": [{"question": q, "wanted": s, "why_hard": w} for q, s, w, _ in base["misses"]],
-           "sweep": sweep, "truncation_probe": trunc, "top_k": TOP_K,
+           "lexical_baseline": lex, "sweep": sweep, "truncation_probe": trunc,
+           "top_k": TOP_K,
            "embedder": "all-MiniLM-L6-v2 (Chroma default)"}
     p = ROOT / "eval" / "retrieval_results.json"
     p.write_text(json.dumps(out, indent=2))

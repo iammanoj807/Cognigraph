@@ -8,6 +8,15 @@
     "mrr": 0.933
   },
   "misses": [],
+  "lexical_baseline": {
+    "hit@1": 16,
+    "hit@3": 19,
+    "n": 20,
+    "hit@1_pct": 80.0,
+    "hit@3_pct": 95.0,
+    "random_hit@1_pct": 8.3,
+    "n_chunks": 12
+  },
   "sweep": [
     {
       "n": 20,

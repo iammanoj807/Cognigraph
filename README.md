@@ -185,6 +185,28 @@ separates six unrelated documents.
 Both questions that missed the top slot were found at rank 3, so every question
 was answerable from what the app actually shows the model.
 
+**Read those numbers with the control below, not on their own.**
+
+### Control: the same questions with no embeddings
+
+| Ranker | hit@1 | hit@3 |
+|---|---|---|
+| Random guess | 8.3% | — |
+| TF-IDF word overlap, no ML | 80.0% | 95.0% |
+| ChromaDB embeddings | 90.0% | 100% |
+
+A keyword ranker with no embeddings at all gets within **2 questions out of
+20**. At this sample size that is noise.
+
+The reason is that the corpus and the questions were written by the same
+person, so the questions reuse vocabulary from their answer passages — which is
+precisely what a keyword ranker exploits. Real user questions do not do that.
+
+So the 90% figure mostly measures how easy this corpus is, not how good the
+retrieval is. **The defensible result from this eval is the embedding-window
+finding below, not the hit rate.** Any future change to the retrieval should be
+judged against this baseline, not against 90%.
+
 ### Why the chunk size is 1000
 
 | Chunk size | hit@1 | hit@3 | MRR |
@@ -209,6 +231,10 @@ right setting: the largest that still fits inside the embedding window.**
 
 ### Honest limits
 
+- **The hit rates barely beat keyword matching** (90% against 80%), so they do
+  not demonstrate that the embedding model is earning its place. Fixing this
+  needs questions phrased in vocabulary the passages do not use — ideally
+  written by someone who did not write the corpus.
 - **20 questions over 6 documents.** Small, and hand-written by the repo author,
   so it can flatter itself. Every label is machine-checked before scoring to
   appear in exactly one document, but that catches ambiguity, not bias.
